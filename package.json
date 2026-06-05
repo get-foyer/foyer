@@ -1,0 +1,39 @@
+{
+  "name": "agent-foyer",
+  "version": "0.1.0",
+  "description": "A pull-forward dashboard that turns Claude Code agent waits into focused, in-context time.",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n server,vite -c cyan,magenta \"tsx watch server/index.ts\" \"vite\"",
+    "build": "vite build",
+    "start": "NODE_ENV=production tsx server/index.ts",
+    "setup": "tsx scripts/setup.ts",
+    "uninstall": "tsx scripts/uninstall.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.55.0",
+    "@inquirer/prompts": "^7.1.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "dompurify": "^3.2.3",
+    "mermaid": "^11.4.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "@types/dompurify": "^3.0.5",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.3.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
