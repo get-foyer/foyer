@@ -1,30 +1,31 @@
 /**
- * POST /hook — single ingest point for all Claude Code HTTP hooks.
+ * POST /hook — single ingest point for all Claude Code HTTP hooks and the Codex command shim.
  *
  * Returns 200 {} immediately (never blocks the agent).
- * All heavy work (graph generation) happens asynchronously after the response.
- *
- * Self-trigger guard: events whose `cwd` matches our own server directory are
- * ignored (prevents Codex/Claude CLI calls from the server creating phantom tasks).
+ * All heavy work (activity summarisation) happens asynchronously after the response.
  */
 import type { Request, Response } from 'express';
-import { dirname } from 'path';
-import { fileURLToPath } from 'url';
 import {
   startSession,
   addTouchPoint,
-  setPlan,
-  setGraph,
-  setGraphError,
-  setGraphGenerating,
+  setWaiting,
+  clearWaiting,
   finishSession,
   getSession,
 } from './state.js';
 import { broadcast } from './sse.js';
-import { extractPlanFromTranscript, extractNewestPlan } from './transcript.js';
-import { getActiveProvider } from './providers/index.js';
+import {
+  recordTranscriptPath,
+  scheduleSummarize,
+  summarizeNow,
+  stopTranscriptWatcher,
+  resetSummarizeBaseline,
+} from './activity.js';
+import { isSelfOriginatedHook } from './providers/internal.js';
 
-const SERVER_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
+// ---------------------------------------------------------------------------
+// Claude Code hook payload shape
+// ---------------------------------------------------------------------------
 
 interface HookPayload {
   hook_event_name?: string;
@@ -34,22 +35,108 @@ interface HookPayload {
   prompt?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
+  // Claude Code Notification fields (exact names confirmed by live payload inspection)
+  notification_type?: string;
+  message?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Codex command-hook envelope — the codex-hook.mjs shim wraps Codex payloads
+// as { source:'codex', event:<CodexEvent>, payload:<raw> }.
+// ---------------------------------------------------------------------------
+
+interface CodexEnvelope {
+  source: 'codex';
+  event: string;
+  payload: Record<string, unknown>;
+}
+
+function isCodexEnvelope(body: unknown): body is CodexEnvelope {
+  return (
+    typeof body === 'object' &&
+    body !== null &&
+    (body as Record<string, unknown>).source === 'codex'
+  );
+}
+
+/** Map Codex lifecycle event names to the internal event strings the switch uses. */
+function mapCodexEvent(codexEvent: string): string {
+  switch (codexEvent) {
+    case 'PermissionRequest':
+      return 'Notification'; // treated as a waiting signal
+    case 'UserPromptSubmit':
+      return 'UserPromptSubmit';
+    case 'PostToolUse':
+      return 'PostToolUse';
+    case 'Stop':
+      return 'Stop';
+    default:
+      return codexEvent;
+  }
+}
+
+/** Notification types that mean the agent is waiting on human input. */
+const WAITING_NOTIFICATION_TYPES = new Set([
+  'permission_prompt',
+  'idle_prompt',
+  'elicitation_dialog',
+]);
+
+// ---------------------------------------------------------------------------
+// Main handler
+// ---------------------------------------------------------------------------
 
 export async function handleHook(req: Request, res: Response): Promise<void> {
   // Respond immediately — never block the agent
   res.json({});
 
-  const payload = req.body as HookPayload;
-  const event = payload.hook_event_name;
-  const sessionId = payload.session_id;
+  const body = req.body as HookPayload | CodexEnvelope;
 
-  // Self-trigger guard: ignore events that came from our own server directory
-  if (payload.cwd === SERVER_DIR || payload.cwd?.startsWith(SERVER_DIR + '/')) {
-    return;
+  // Normalise Codex envelope onto the flat HookPayload shape the switch expects.
+  let event: string | undefined;
+  let sessionId: string | undefined;
+  let payload: HookPayload;
+
+  if (isCodexEnvelope(body)) {
+    event = mapCodexEvent(body.event);
+    // Codex session id may live under different keys depending on the version
+    sessionId =
+      (body.payload.session_id as string | undefined) ??
+      (body.payload.conversation_id as string | undefined) ??
+      (body.payload.thread_id as string | undefined);
+    // Flatten the Codex payload so handlers can read standard fields
+    payload = {
+      hook_event_name: event,
+      session_id: sessionId,
+      cwd: body.payload.cwd as string | undefined,
+      prompt: body.payload.prompt as string | undefined,
+      tool_name: body.payload.tool_name as string | undefined,
+      tool_input: body.payload.tool_input as Record<string, unknown> | undefined,
+      // For PermissionRequest→Notification: surface the permission reason as message
+      notification_type: 'permission_prompt',
+      message:
+        (body.payload.message as string | undefined) ??
+        (body.payload.description as string | undefined) ??
+        (body.payload.command as string | undefined),
+    };
+  } else {
+    payload = body;
+    event = payload.hook_event_name;
+    sessionId = payload.session_id;
   }
 
   if (!event || !sessionId) return;
+
+  // Server-side backstop: silently drop any hook event that originated from
+  // Foyer's own internal LLM subprocess calls.  Without this guard, each
+  // `claude -p` / `codex exec` narration call would register a new phantom
+  // session with the title "You are narrating, for a live dashboard…".
+  // This check is provider-agnostic and catches self-triggered Stop / PostToolUse
+  // events too, which would otherwise amplify (Stop → summarizeNow → another call).
+  if (isSelfOriginatedHook(payload)) {
+    console.log(`[hook] dropped self-originated ${event} for ${sessionId}`);
+    return;
+  }
 
   try {
     switch (event) {
@@ -58,11 +145,27 @@ export async function handleHook(req: Request, res: Response): Promise<void> {
         break;
       case 'PreToolUse':
         if (payload.tool_name === 'ExitPlanMode') {
-          await onExitPlanMode(sessionId, payload);
+          // Agent approved the plan — trigger immediate summarisation
+          clearWaiting(sessionId);
+          summarizeNow(sessionId);
+        } else if (payload.tool_name === 'AskUserQuestion') {
+          // Extract the first question text from the `questions` array
+          const qs = payload.tool_input?.questions;
+          const firstQ =
+            Array.isArray(qs) && qs.length > 0 ? (qs[0] as Record<string, unknown>) : null;
+          const questionText = typeof firstQ?.question === 'string' ? firstQ.question.trim() : '';
+          await onNotification(sessionId, {
+            ...payload,
+            notification_type: 'elicitation_dialog',
+            message: questionText || 'Response required',
+          });
         }
         break;
       case 'PostToolUse':
         await onPostToolUse(sessionId, payload);
+        break;
+      case 'Notification':
+        await onNotification(sessionId, payload);
         break;
       case 'Stop':
         await onStop(sessionId, payload);
@@ -79,45 +182,31 @@ export async function handleHook(req: Request, res: Response): Promise<void> {
 
 async function onUserPrompt(sessionId: string, p: HookPayload): Promise<void> {
   const prompt = (p.prompt ?? '').trim() || '(no prompt)';
-  const session = startSession(sessionId, prompt);
-  broadcast('task', { sessionId, prompt, startedAt: session.startedAt });
-  console.log(`[hook] Task started: ${sessionId} — "${prompt.slice(0, 80)}"`);
-}
-
-async function onExitPlanMode(sessionId: string, p: HookPayload): Promise<void> {
-  // Strategy 1: plan text in tool_input.plan (classic Claude Code)
-  let planText: string | null =
-    typeof p.tool_input?.plan === 'string' ? p.tool_input.plan : null;
-
-  // Strategy 2: read plan file referenced from transcript
-  if (!planText && p.transcript_path) {
-    planText = await extractPlanFromTranscript(p.transcript_path);
-  }
-
-  // Strategy 3: newest ~/.claude/plans/*.md
-  if (!planText) {
-    planText = await extractNewestPlan();
-  }
-
-  if (!planText) {
-    console.warn(`[hook] Could not extract plan for ${sessionId}`);
-    return;
-  }
-
-  setPlan(sessionId, planText);
-  broadcast('plan', { sessionId, plan: planText });
-  console.log(`[hook] Plan captured for ${sessionId} (${planText.length} chars)`);
-
-  // Kick off graph generation asynchronously
-  const provider = getActiveProvider();
-  if (provider) {
-    setGraphGenerating(sessionId);
-    broadcast('graph_generating', { sessionId });
-    generateGraphAsync(sessionId, planText, provider);
-  }
+  const { session, continued } = startSession(sessionId, prompt);
+  // Record the transcript path immediately — activity.ts uses it for summarisation context
+  recordTranscriptPath(sessionId, p.transcript_path);
+  broadcast('task', { sessionId, prompt, prompts: session.prompts, startedAt: session.startedAt });
+  // On a follow-up prompt (continue), the transcript may not have grown past the last
+  // summary yet — force the next run so the new focus is reflected immediately.
+  if (continued) resetSummarizeBaseline(sessionId);
+  // Kick off summarisation immediately so panels show a "thinking" spinner from t=0.
+  // Fire-and-forget: handleHook already returned 200 before this runs, so the
+  // agent is never blocked. The single-flight + skip-if-unchanged guards in
+  // activity.ts prevent redundant calls if PostToolUse fires soon after.
+  summarizeNow(sessionId);
+  console.log(
+    `[hook] Task ${continued ? 'continued' : 'started'}: ${sessionId} — "${prompt.slice(0, 80)}"`,
+  );
 }
 
 async function onPostToolUse(sessionId: string, p: HookPayload): Promise<void> {
+  // Any tool completion clears the waiting state (agent is active again)
+  const s = getSession(sessionId);
+  if (s?.status === 'waiting') {
+    clearWaiting(sessionId);
+    broadcast('task', { sessionId, prompt: s.prompt, prompts: s.prompts, startedAt: s.startedAt });
+  }
+
   const toolName = p.tool_name ?? 'unknown';
   const filePath =
     typeof p.tool_input?.file_path === 'string'
@@ -126,7 +215,12 @@ async function onPostToolUse(sessionId: string, p: HookPayload): Promise<void> {
         ? p.tool_input.path
         : null;
 
-  if (!filePath) return;
+  if (!filePath) {
+    // Update transcript path even for non-file tools, then schedule summarisation
+    recordTranscriptPath(sessionId, p.transcript_path);
+    scheduleSummarize(sessionId);
+    return;
+  }
 
   const tp = { path: filePath, tool: toolName, ts: Date.now() };
   const ok = addTouchPoint(sessionId, tp);
@@ -138,34 +232,47 @@ async function onPostToolUse(sessionId: string, p: HookPayload): Promise<void> {
   }
 
   broadcast('touch', { sessionId, ...tp });
+
+  // Update the transcript path and schedule a debounced summarisation
+  recordTranscriptPath(sessionId, p.transcript_path);
+  scheduleSummarize(sessionId);
 }
 
-async function onStop(sessionId: string, p: HookPayload): Promise<void> {
+async function onNotification(sessionId: string, p: HookPayload): Promise<void> {
+  // Only certain notification types mean the agent is waiting on us
+  const ntype = p.notification_type ?? '';
+  if (!WAITING_NOTIFICATION_TYPES.has(ntype)) return;
+
+  const defaultReason: Record<string, string> = {
+    permission_prompt: 'Permission requested',
+    idle_prompt: 'Waiting for your input',
+    elicitation_dialog: 'Response required',
+  };
+  const reason = (p.message ?? '').trim() || defaultReason[ntype] || 'Needs your attention';
+
+  const ok = setWaiting(sessionId, reason);
+  if (!ok) {
+    // Unknown session (e.g. server restarted mid-task) — resume minimally.
+    // Broadcast `task` first so the client adds the session before the `waiting` event arrives.
+    const { session: s } = startSession(sessionId, '(resumed session)');
+    broadcast('task', {
+      sessionId,
+      prompt: '(resumed session)',
+      prompts: s.prompts,
+      startedAt: s.startedAt,
+    });
+    setWaiting(sessionId, reason);
+  }
+
+  broadcast('waiting', { sessionId, reason });
+  console.log(`[hook] Waiting on user: ${sessionId} — ${ntype}: ${reason.slice(0, 80)}`);
+}
+
+async function onStop(sessionId: string, _p: HookPayload): Promise<void> {
   finishSession(sessionId);
+  stopTranscriptWatcher(sessionId); // clean up — watcher is redundant once Stop fires
   broadcast('done', { sessionId, finishedAt: Date.now() });
   console.log(`[hook] Task done: ${sessionId}`);
-}
-
-// ---------------------------------------------------------------------------
-// Async graph generation (fire-and-forget from hook handler)
-// ---------------------------------------------------------------------------
-
-function generateGraphAsync(
-  sessionId: string,
-  planText: string,
-  provider: ReturnType<typeof getActiveProvider> & object
-): void {
-  provider
-    .generateGraph(planText)
-    .then((mermaid) => {
-      setGraph(sessionId, mermaid);
-      broadcast('graph', { sessionId, graph: mermaid });
-      console.log(`[hook] Graph generated for ${sessionId}`);
-    })
-    .catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      setGraphError(sessionId, msg);
-      broadcast('graph_error', { sessionId, error: msg });
-      console.error(`[hook] Graph generation failed for ${sessionId}:`, msg);
-    });
+  // Fire a final summarisation so the completed session state is captured
+  summarizeNow(sessionId);
 }

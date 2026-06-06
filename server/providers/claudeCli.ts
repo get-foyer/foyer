@@ -3,25 +3,45 @@
  *
  * Shells out to `claude -p` using the user's Claude subscription.
  *
- * Self-trigger guard: runs with an isolated CLAUDE_CONFIG_DIR that has NO
- * hooks installed, so the internal claude -p call never POSTs to our own
- * /hook endpoint and creates phantom tasks.
+ * Self-trigger isolation (three layers):
+ *  1. The subprocess runs with an isolated cwd (foyer-internal- prefix) so
+ *     project-level .claude/settings.json hooks don't load (resolved from cwd).
+ *  2. `--setting-sources user` explicitly loads only user-level settings from
+ *     the isolated (empty) CLAUDE_CONFIG_DIR, excluding project/local hooks
+ *     regardless of cwd — deterministic, built-in source exclusion.
+ *  3. Every prompt is prefixed with FOYER_INTERNAL_SENTINEL so the server-side
+ *     guard in hooks.ts can drop any event that leaks through anyway.
  *
  * ⚠️ Warning: from 2026-06-15, subscription headless usage draws from a
  * separate monthly "Agent SDK credit" pool — the setup wizard surfaces this.
  */
 import { execFile as _execFile } from 'child_process';
 import { promisify } from 'util';
-import { tmpdir, homedir } from 'os';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdtemp, rm } from 'fs/promises';
-import type { LlmProvider, ResearchResult } from './index.js';
+import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
+import { stripFences, normalizeTopics } from './text.js';
+import { FALLBACK_GRAPH } from './codex.js';
+import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './internal.js';
 
 const execFile = promisify(_execFile);
+
+/**
+ * Fast, cheap model for activity summarisation + graph generation.
+ *
+ * The summariser runs frequently (debounced, plus periodic polls), so it is
+ * pinned to Haiku to keep cost low — matching the deliberate fast-model choice
+ * in the other providers (anthropicApi defaults to claude-haiku-4-5; codex uses
+ * model_reasoning_effort=low). Overridable via FOYER_CLAUDE_CLI_SUMMARY_MODEL.
+ */
+const SUMMARY_MODEL = process.env.FOYER_CLAUDE_CLI_SUMMARY_MODEL ?? 'claude-haiku-4-5';
 
 const GRAPH_PROMPT = (plan: string) =>
   `Convert the following task plan into a concise Mermaid flowchart.
 Use "graph TD" (top-down) syntax. Output ONLY the mermaid diagram code — no explanation, no markdown fences.
+Wrap every node label in double quotes so that spaces and special characters are handled correctly — for example A["Read file.ts"] instead of A[Read file.ts].
+Keep each node label short (≤ 5 words) so nodes stay compact and readable.
 
 Plan:
 ${plan.slice(0, 4000)}`;
@@ -48,31 +68,52 @@ export class ClaudeCliProvider implements LlmProvider {
     return stripFences(result);
   }
 
+  async summarizeActivity(
+    ctx: ActivityContext,
+  ): Promise<{ summary: string; graph: string; topics: SuggestedTopic[] }> {
+    const { buildActivityPrompt } = await import('./codex.js');
+    const prompt = buildActivityPrompt(ctx);
+    // Pin to a fast/cheap model — summarisation runs often and doesn't need the
+    // user's (potentially Opus-tier) default CLI model. Request JSON output so
+    // we can parse summary + graph reliably.
+    const raw = await this.run(prompt, ['--model', SUMMARY_MODEL]);
+    return parseActivityJson(raw);
+  }
+
   async research(topic: string): Promise<ResearchResult> {
     const result = await this.run(RESEARCH_PROMPT(topic), [
-      '--allowedTools', 'WebSearch,WebFetch',
-      '--output-format', 'text',
+      '--allowedTools',
+      'WebSearch,WebFetch',
+      '--output-format',
+      'text',
     ]);
     return parseResearchText(result);
   }
 
   private async run(prompt: string, extraArgs: string[]): Promise<string> {
-    // Create a throw-away config dir with NO hooks so we don't self-trigger
-    const isolatedConfigDir = await mkdtemp(join(tmpdir(), 'foyer-claude-'));
+    // Isolation layer 1: create a throw-away directory used as BOTH the cwd
+    // and CLAUDE_CONFIG_DIR.  Running from an empty dir prevents project-level
+    // .claude/settings.json hooks from loading (they're resolved relative to
+    // cwd), and the empty CLAUDE_CONFIG_DIR has no user-level hooks either.
+    const isolatedDir = await mkdtemp(join(tmpdir(), FOYER_INTERNAL_DIR_PREFIX));
+    // Isolation layer 2 (--setting-sources user) is expressed in buildClaudeArgs.
+    // Isolation layer 3: prefix the prompt with the sentinel so the server-side
+    // guard in hooks.ts can drop any event that reaches /hook despite layers 1+2.
+    const sentinelPrompt = `${FOYER_INTERNAL_SENTINEL}\n${prompt}`;
     try {
-      const { stdout } = await execFile(
-        'claude',
-        ['-p', prompt, '--output-format', 'json', ...extraArgs],
-        {
-          timeout: 90_000,
-          env: {
-            ...process.env,
-            CLAUDE_CONFIG_DIR: isolatedConfigDir,
-            // Explicitly unset API key so subscription auth is used
-            ANTHROPIC_API_KEY: undefined,
-          },
-        }
-      );
+      const { stdout } = await execFile('claude', buildClaudeArgs(sentinelPrompt, extraArgs), {
+        timeout: 90_000,
+        cwd: isolatedDir,
+        env: {
+          ...process.env,
+          // Do NOT override CLAUDE_CONFIG_DIR — the real config dir has the auth
+          // token. Self-trigger isolation is handled by the cwd (foyer-internal-
+          // prefix) and the sentinel prompt prefix, which the server-side guard
+          // checks and drops before any phantom session can be created.
+          // Explicitly unset API key so subscription auth is used
+          ANTHROPIC_API_KEY: undefined,
+        },
+      });
       const parsed = JSON.parse(stdout) as { result?: string };
       return parsed.result ?? stdout;
     } catch (err) {
@@ -82,11 +123,13 @@ export class ClaudeCliProvider implements LlmProvider {
         try {
           const parsed = JSON.parse(e.stdout) as { result?: string };
           if (parsed.result) return parsed.result;
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
       throw new Error(`claude -p failed: ${e.message ?? String(err)}`);
     } finally {
-      await rm(isolatedConfigDir, { recursive: true, force: true });
+      await rm(isolatedDir, { recursive: true, force: true });
     }
   }
 }
@@ -95,14 +138,63 @@ export class ClaudeCliProvider implements LlmProvider {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function stripFences(code: string): string {
-  return code
-    .replace(/^```(?:mermaid)?\n?/m, '')
-    .replace(/```\s*$/m, '')
-    .trim();
+/**
+ * Build the argv for an internal `claude -p` call.
+ *
+ * Exported as a pure function so tests can assert that source-isolation flags
+ * are present without spawning a subprocess.  The `sentinelPrompt` parameter
+ * must already contain the FOYER_INTERNAL_SENTINEL prefix (the caller's
+ * responsibility — `run()` prepends it before calling here).
+ *
+ * `--setting-sources user` loads only user-level settings from the (empty,
+ * isolated) CLAUDE_CONFIG_DIR, explicitly excluding project/local hooks.
+ */
+export function buildClaudeArgs(sentinelPrompt: string, extraArgs: string[]): string[] {
+  return [
+    '-p',
+    sentinelPrompt,
+    '--output-format',
+    'json',
+    '--setting-sources',
+    'user',
+    ...extraArgs,
+  ];
 }
 
-function parseResearchText(text: string): ResearchResult {
+/**
+ * Parse { summary, graph, topics } from the LLM's JSON output.
+ * Falls back gracefully if JSON is malformed or fields are missing.
+ * Shared by ClaudeCliProvider and AnthropicApiProvider.
+ */
+export function parseActivityJson(raw: string): {
+  summary: string;
+  graph: string;
+  topics: SuggestedTopic[];
+} {
+  // Strip any accidental markdown fences around the JSON
+  const cleaned = raw
+    .replace(/^```(?:json)?\n?/m, '')
+    .replace(/```\s*$/m, '')
+    .trim();
+  try {
+    const parsed = JSON.parse(cleaned) as Record<string, unknown>;
+    const graphRaw = typeof parsed.graph === 'string' ? parsed.graph : FALLBACK_GRAPH;
+    return {
+      summary: typeof parsed.summary === 'string' ? parsed.summary : 'Agent is working…',
+      graph: stripFences(graphRaw),
+      topics: normalizeTopics(parsed.topics),
+    };
+  } catch {
+    // If JSON parse fails, treat the whole thing as a summary with a fallback graph
+    return {
+      summary: raw.slice(0, 800) || 'Agent is working…',
+      graph: FALLBACK_GRAPH,
+      topics: [],
+    };
+  }
+}
+
+export function parseResearchText(text: string): ResearchResult {
   // Extract URLs from the text — the model formats them as a numbered list
   const urlPattern = /(?:https?:\/\/[^\s)>\]]+)/g;
   const urlMatches = text.match(urlPattern) ?? [];

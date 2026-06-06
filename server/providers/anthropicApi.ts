@@ -8,11 +8,14 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { cfg } from '../config.js';
-import type { LlmProvider, ResearchResult } from './index.js';
+import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
+import { stripFences } from './text.js';
 
 const GRAPH_PROMPT = (plan: string) =>
   `Convert the following task plan into a concise Mermaid flowchart.
 Use "graph TD" (top-down) syntax. Output ONLY the mermaid diagram code — no explanation, no markdown fences.
+Wrap every node label in double quotes so that spaces and special characters are handled correctly — for example A["Read file.ts"] instead of A[Read file.ts].
+Keep each node label short (≤ 5 words) so nodes stay compact and readable.
 
 Plan:
 ${plan.slice(0, 8000)}`;
@@ -30,7 +33,7 @@ export class AnthropicApiProvider implements LlmProvider {
     if (!this.client) {
       if (!cfg.anthropicApiKey) {
         throw new Error(
-          'ANTHROPIC_API_KEY is not set. Run `npm run setup` to configure your API key.'
+          'ANTHROPIC_API_KEY is not set. Run `npm run setup` to configure your API key.',
         );
       }
       this.client = new Anthropic({ apiKey: cfg.anthropicApiKey });
@@ -54,6 +57,31 @@ export class AnthropicApiProvider implements LlmProvider {
     return stripFences(text);
   }
 
+  async summarizeActivity(
+    ctx: ActivityContext,
+  ): Promise<{ summary: string; graph: string; topics: SuggestedTopic[] }> {
+    const { buildActivityPrompt } = await import('./codex.js');
+    const { parseActivityJson } = await import('./claudeCli.js');
+    const client = this.getClient();
+
+    const prompt = buildActivityPrompt(ctx);
+    const response = await client.messages.create({
+      model: cfg.anthropicModel,
+      // Bumped from 1024 to fit the added topics array alongside summary + graph.
+      max_tokens: 1536,
+      // No web_search — this is summarisation, not research; keeps cost low
+      messages: [
+        {
+          role: 'user',
+          content: `${prompt}\n\nRespond with ONLY a JSON object matching this schema: { "summary": string, "graph": string, "topics": Array<{ "topic": string, "reason": string }> }. No markdown fences, no explanation.`,
+        },
+      ],
+    });
+
+    const text = extractText(response.content);
+    return parseActivityJson(text);
+  }
+
   async research(topic: string): Promise<ResearchResult> {
     const client = this.getClient();
 
@@ -72,7 +100,11 @@ export class AnthropicApiProvider implements LlmProvider {
         max_tokens: 4096,
         tools: [
           // Types: don't annotate as Anthropic.Tool[] — server tools are a different shape
-          { type: 'web_search_20260209', name: 'web_search', max_uses: 5 } as unknown as Anthropic.Tool,
+          {
+            type: 'web_search_20260209',
+            name: 'web_search',
+            max_uses: 5,
+          } as unknown as Anthropic.Tool,
         ],
         messages,
       });
@@ -84,7 +116,7 @@ export class AnthropicApiProvider implements LlmProvider {
           // Extract citations if present
           const blockAny = block as unknown as Record<string, unknown>;
           if ('citations' in blockAny && Array.isArray(blockAny.citations)) {
-            for (const cite of (blockAny.citations as Array<{ url?: string; title?: string }>) ) {
+            for (const cite of blockAny.citations as Array<{ url?: string; title?: string }>) {
               if (cite.url) {
                 links.push({ title: cite.title ?? cite.url, url: cite.url });
               }
@@ -136,11 +168,4 @@ function extractText(content: Anthropic.ContentBlock[]): string {
     .filter((b): b is Anthropic.TextBlock => b.type === 'text')
     .map((b) => b.text)
     .join('');
-}
-
-function stripFences(code: string): string {
-  return code
-    .replace(/^```(?:mermaid)?\n?/m, '')
-    .replace(/```\s*$/m, '')
-    .trim();
 }

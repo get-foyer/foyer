@@ -13,6 +13,6 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "server", "scripts"],
+  "include": ["src", "server", "scripts", "vitest.setup.ts"],
   "exclude": ["node_modules", "dist"]
 }

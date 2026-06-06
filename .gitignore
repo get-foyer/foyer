@@ -3,3 +3,5 @@ dist/
 .env
 *.local
 .DS_Store
+.gstack/
+package-lock.json

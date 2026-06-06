@@ -25,13 +25,15 @@ export function TouchPoints({ touchPoints }: Props) {
     <section className="panel touch-panel">
       <h2 className="panel__title">
         Live Files
-        {touchPoints.length > 0 && (
-          <span className="panel__count">{touchPoints.length}</span>
-        )}
+        {touchPoints.length > 0 && <span className="panel__count">{touchPoints.length}</span>}
       </h2>
 
       {touchPoints.length === 0 ? (
-        <p className="panel__empty">No files touched yet.</p>
+        <div className="panel__empty">
+          <span className="panel__empty-glyph">◱</span>
+          <p>No file activity yet.</p>
+          <span className="panel__hint">File operations appear here as the agent works.</span>
+        </div>
       ) : (
         <ul className="tp-list" ref={listRef}>
           {touchPoints.map((tp, i) => (
@@ -59,5 +61,9 @@ function shortenPath(p: string): string {
 }
 
 function formatTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date(ts).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
