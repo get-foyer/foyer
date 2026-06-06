@@ -6,12 +6,11 @@
  * that point to http://localhost:<port>/hook. All other hooks are preserved.
  */
 import { input, confirm } from '@inquirer/prompts';
-import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { uninstallHooks } from '../server/install.js';
+import { uninstallHooks, uninstallCodexHooks } from '../server/install.js';
 import { config as loadDotenv } from 'dotenv';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -41,10 +40,24 @@ async function main() {
   }
 
   await uninstallHooks(target, port);
+
+  // Also remove Codex hooks if present
+  const codexConfigPath = join(homedir(), '.codex', 'config.toml');
+  try {
+    await uninstallCodexHooks(codexConfigPath);
+  } catch {
+    // Codex config may not exist — uninstallCodexHooks already logs this
+  }
+
   console.log('\n✅ Hooks removed. The dashboard server can be stopped with Ctrl+C.\n');
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
+  // Clean cancel on Ctrl-C (ExitPromptError from @inquirer/prompts)
+  if (err instanceof Error && err.name === 'ExitPromptError') {
+    console.log('\nUninstall cancelled.\n');
+    process.exit(0);
+  }
   console.error('\n✗ Uninstall failed:', err instanceof Error ? err.message : err);
   process.exit(1);
 });

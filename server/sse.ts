@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import type { SseType } from '../src/types.js';
-import { getActiveSession } from './state.js';
+import { getAllSessions, getActiveSessionId } from './state.js';
 
 // Active SSE client connections
 const clients = new Set<Response>();
@@ -14,9 +14,9 @@ export function handleSseConnection(req: Request, res: Response): void {
   res.setHeader('X-Accel-Buffering', 'no'); // disable nginx buffering
   res.flushHeaders();
 
-  // Send immediate snapshot so the browser isn't blank on connect/reconnect
-  const active = getActiveSession();
-  sendTo(res, 'snapshot', active ?? null);
+  // Send immediate snapshot so the browser isn't blank on connect/reconnect.
+  // Carries all sessions (working + done) so tabs survive EventSource reconnects.
+  sendTo(res, 'snapshot', { sessions: getAllSessions(), activeSessionId: getActiveSessionId() });
 
   clients.add(res);
 

@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "2-4 sentences of markdown describing what the agent is doing right now. Present tense, no preamble."
+    },
+    "graph": {
+      "type": "string",
+      "description": "Valid Mermaid `graph LR` milestone STORYLINE of the session (a glanceable fingerprint, not a tool-by-tool trace). First node is a rounded subject node naming the session goal in <=5 words tagged :::goal, e.g. G([\"Fix login bug\"]):::goal. Then 3-6 intent-named PHASE nodes (e.g. \"Diagnose token expiry\"), never raw tool calls. Mark the current phase :::active (when waiting, append a reason chip and mark THAT). Append-only: extend the previous storyline, do not redraw. Max 6 nodes after the goal node; labels double-quoted and <=5 words. End with: classDef goal fill:#161b22,stroke:#4493f8,color:#fff; and classDef active fill:#1f6feb,stroke:#4493f8,color:#fff;. NO markdown code fences."
+    },
+    "topics": {
+      "type": "array",
+      "description": "3-6 research topics worth reading up on, derived from the agent's current work (libraries/APIs in play, concepts, error messages, unfamiliar terms). Extraction only — do NOT search the web. Skip the trivial/obvious. Keep stable vs the previous topics unless the focus has shifted. Empty array if nothing is worth suggesting.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string",
+            "description": "A concise, searchable research topic (<=120 chars), e.g. \"React useTransition hook\"."
+          },
+          "reason": {
+            "type": "string",
+            "description": "One short line of provenance grounding the topic in the work (<=160 chars), e.g. \"you're editing App.tsx which uses useTransition\"."
+          }
+        },
+        "required": ["topic", "reason"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["summary", "graph", "topics"],
+  "additionalProperties": false
+}

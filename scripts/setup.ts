@@ -12,12 +12,12 @@
 import { select, input, confirm } from '@inquirer/prompts';
 import { execFile as _execFile } from 'child_process';
 import { promisify } from 'util';
-import { writeFile, readFile, access } from 'fs/promises';
+import { writeFile, access, copyFile } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { installHooks } from '../server/install.js';
+import { installHooks, installCodexHooks } from '../server/install.js';
 
 const execFile = promisify(_execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -29,8 +29,9 @@ const PROJECT_ROOT = join(__dirname, '..');
 
 async function detectCodex(): Promise<boolean> {
   try {
-    const { stdout } = await execFile('codex', ['login', 'status'], { timeout: 5_000 });
-    return stdout.toLowerCase().includes('logged in');
+    // `codex login status` prints to stderr, not stdout
+    const { stdout, stderr } = await execFile('codex', ['login', 'status'], { timeout: 5_000 });
+    return (stdout + stderr).toLowerCase().includes('logged in');
   } catch {
     return false;
   }
@@ -56,7 +57,7 @@ function detectAnthropicApiKey(): string | null {
 async function main() {
   console.log('\n🚪 Agent Foyer — Setup\n');
   console.log('This wizard configures your LLM backend, Claude Code hooks, and dashboard port.');
-  console.log('You can re-run `npm run setup` at any time to reconfigure.\n');
+  console.log('You can re-run `pnpm setup` at any time to reconfigure.\n');
 
   // --- Detect available backends ---
   console.log('Detecting available LLM backends…');
@@ -90,7 +91,8 @@ async function main() {
       },
       {
         value: 'claude-cli',
-        name: 'Claude CLI — Claude subscription' + (hasClaude ? ' (detected ✓)' : ' (not detected)'),
+        name:
+          'Claude CLI — Claude subscription' + (hasClaude ? ' (detected ✓)' : ' (not detected)'),
         description:
           'Uses `claude -p` with your Claude Pro/Max subscription — no per-token cost.\n' +
           '⚠  From 2026-06-15: subscription headless usage draws from a SEPARATE monthly "Agent SDK credit"\n' +
@@ -107,27 +109,50 @@ async function main() {
     ],
   });
 
+  // Warn if chosen backend was not auto-detected
+  const isDetected =
+    (providerChoice === 'codex' && hasCodex) ||
+    (providerChoice === 'claude-cli' && hasClaude) ||
+    (providerChoice === 'anthropic-api' && !!existingKey);
+
+  if (!isDetected) {
+    console.log('');
+    const proceed = await confirm({
+      message: `"${providerChoice}" was not auto-detected. Graph generation and research may fail until it is configured. Continue anyway?`,
+      default: false,
+    });
+    if (!proceed) {
+      console.log('\nSetup cancelled.\n');
+      process.exit(0);
+    }
+  }
+
   // --- Anthropic API key (only if BYOK) ---
   let anthropicApiKey = '';
   let anthropicModel = 'claude-haiku-4-5';
 
   if (providerChoice === 'anthropic-api') {
     console.log('');
-    anthropicApiKey = existingKey ?? await input({
-      message: 'Anthropic API key:',
-      validate: (v) => {
-        if (!v.startsWith('sk-ant-')) return 'Key should start with sk-ant-';
-        if (v.length < 20) return 'Key looks too short';
-        return true;
-      },
-    });
+    anthropicApiKey =
+      existingKey ??
+      (await input({
+        message: 'Anthropic API key:',
+        validate: (v) => {
+          if (!v.startsWith('sk-ant-')) return 'Key should start with sk-ant-';
+          if (v.length < 20) return 'Key looks too short';
+          return true;
+        },
+      }));
 
     const modelChoice = await select({
       message: 'Model (for graph generation and research):',
       choices: [
-        { value: 'claude-haiku-4-5', name: 'claude-haiku-4-5 (fast, cheap — recommended for this use case)' },
+        {
+          value: 'claude-haiku-4-5',
+          name: 'claude-haiku-4-5 (fast, cheap — recommended for this use case)',
+        },
         { value: 'claude-sonnet-4-6', name: 'claude-sonnet-4-6 (better quality, higher cost)' },
-        { value: 'claude-opus-4-8',  name: 'claude-opus-4-8  (highest quality, most expensive)' },
+        { value: 'claude-opus-4-8', name: 'claude-opus-4-8  (highest quality, most expensive)' },
       ],
     });
     anthropicModel = modelChoice;
@@ -160,10 +185,10 @@ async function main() {
       },
       {
         value: 'local',
-        name: 'Project-local (a specific repo\'s .claude/settings.json)',
+        name: "Project-local (a specific repo's .claude/settings.json)",
         description:
           'Hooks only fire when Claude Code runs inside that specific repo.\n' +
-          'More contained, but the dashboard won\'t populate in other repos.',
+          "More contained, but the dashboard won't populate in other repos.",
       },
     ],
   });
@@ -196,9 +221,19 @@ async function main() {
     process.exit(0);
   }
 
+  // --- Back up existing .env before overwrite ---
+  const envPath = join(PROJECT_ROOT, '.env');
+  try {
+    await access(envPath);
+    await copyFile(envPath, envPath + '.foyer-backup');
+    console.log('\n✓ Backed up existing .env to .env.foyer-backup');
+  } catch {
+    // No existing .env — nothing to back up
+  }
+
   // --- Write .env ---
   const envLines = [
-    '# Agent Foyer — generated by `npm run setup`',
+    '# Agent Foyer — generated by `pnpm setup`',
     `FOYER_PORT=${port}`,
     `FOYER_PROVIDER=${providerChoice}`,
   ];
@@ -206,27 +241,51 @@ async function main() {
     envLines.push(`ANTHROPIC_API_KEY=${anthropicApiKey}`);
     envLines.push(`FOYER_ANTHROPIC_MODEL=${anthropicModel}`);
   }
-  const envPath = join(PROJECT_ROOT, '.env');
   await writeFile(envPath, envLines.join('\n') + '\n', 'utf-8');
-  console.log(`\n✓ Written .env`);
+  console.log(`✓ Written .env`);
 
-  // --- Install hooks ---
+  // --- Install Claude Code hooks ---
   await installHooks(hookSettingsPath, port);
+
+  // --- Optionally install Codex lifecycle hooks (for monitoring live Codex sessions) ---
+  let codexHooksInstalled = false;
+  if (hasCodex) {
+    console.log('');
+    codexHooksInstalled = await confirm({
+      message:
+        'Also install Codex lifecycle hooks so Codex sessions appear in the dashboard?\n' +
+        '  (Writes to ~/.codex/config.toml and sets features.hooks = true. Backed up first.)',
+      default: true,
+    });
+    if (codexHooksInstalled) {
+      const codexConfigPath = join(homedir(), '.codex', 'config.toml');
+      const shimPath = join(PROJECT_ROOT, 'server', 'codex-hook.mjs');
+      await installCodexHooks(codexConfigPath, shimPath, port);
+    }
+  }
 
   // --- Done ---
   console.log('\n✅ Setup complete!\n');
+  if (codexHooksInstalled) {
+    console.log('ℹ  Codex monitoring is active. Run `pnpm uninstall` to remove Codex hooks.');
+  }
   console.log('Next steps:');
   console.log('  1. Build and start the dashboard:');
-  console.log('       npm run build && npm start');
+  console.log('       pnpm build && pnpm start');
   console.log('  2. Open your browser:');
   console.log(`       http://localhost:${port}`);
   console.log('  3. In another window, run Claude Code in your repo — the dashboard');
   console.log('     will populate as the agent works.\n');
-  console.log('To uninstall hooks:  npm run uninstall');
-  console.log('To reconfigure:      npm run setup\n');
+  console.log('To uninstall hooks:  pnpm uninstall');
+  console.log('To reconfigure:      pnpm setup\n');
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
+  // Clean cancel on Ctrl-C (ExitPromptError from @inquirer/prompts)
+  if (err instanceof Error && err.name === 'ExitPromptError') {
+    console.log('\nSetup cancelled.\n');
+    process.exit(0);
+  }
   console.error('\n✗ Setup failed:', err instanceof Error ? err.message : err);
   process.exit(1);
 });
