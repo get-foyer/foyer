@@ -57,10 +57,14 @@ export interface SuggestedTopic {
   reason: string;
 }
 
+/** Lifecycle state of a session.
+ *  working = agent is running; waiting = blocked on user input; done = stopped cleanly;
+ *  interrupted = was live when the server died, recovered from disk on the next boot (terminal). */
+export type SessionStatus = 'working' | 'waiting' | 'done' | 'interrupted';
+
 export interface Session {
   sessionId: string;
-  /** working = agent is running; waiting = agent is blocked on user input; done = agent has stopped. */
-  status: 'working' | 'waiting' | 'done';
+  status: SessionStatus;
   /** Reason the agent is blocked, e.g. a permission request. Null when not waiting. */
   waitingReason: string | null;
   prompt: string;
@@ -86,6 +90,9 @@ export interface Session {
   suggestedTopics: SuggestedTopic[];
   startedAt: number;
   finishedAt: number | null;
+  /** User dismissed this tab. Persisted so a closed session stays hidden across restarts
+   *  (the snapshot filters these out) without destroying its history on disk. */
+  closed?: boolean;
 }
 
 /** Payload for the `snapshot` SSE event. Carries all known sessions + the server-designated active session. */

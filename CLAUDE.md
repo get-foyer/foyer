@@ -27,3 +27,4 @@ Non-trivial architecture decisions are recorded as ADRs in [`docs/decisions/`](d
 source of truth — read it for the "why" before changing a decision; supersede, never rewrite.
 
 - [0001 — Auto-captured research topics (suggest-and-click)](docs/decisions/0001-auto-captured-research-topics.md)
+- [0002 — Session persistence (JSON-file store)](docs/decisions/0002-session-persistence.md)

@@ -342,7 +342,16 @@ export default function App() {
           activeSessionId={state.activeSessionId}
           unseenSessionIds={state.unseenSessionIds}
           onSelect={(id) => dispatch({ type: 'select', payload: { sessionId: id } })}
-          onClose={(id) => dispatch({ type: 'close', payload: { sessionId: id } })}
+          onClose={(id) => {
+            // Local: drop the tab now. Server: persist a `closed` flag so it stays
+            // dismissed across reloads/restarts (snapshot filters closed sessions out).
+            dispatch({ type: 'close', payload: { sessionId: id } });
+            void fetch('/close', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId: id }),
+            });
+          }}
         />
 
         <main className="app__main">

@@ -7,11 +7,77 @@ import type {
 } from '../src/types.js';
 import { newSession, MAX_FOCUS } from '../src/types.js';
 import { normalizeWhitespace } from './providers/text.js';
+import { createNoopStore, type SessionStore } from './store.js';
 
 export type { Session };
 
 const sessions = new Map<string, Session>();
 let activeSessionId: string | null = null;
+
+// ---------------------------------------------------------------------------
+// Persistence (write-through to a SessionStore)
+//
+// The Map above stays the synchronous read model. Mutators mark a session dirty;
+// a debounced flusher writes it through to the store. Lifecycle transitions
+// (finish / waiting / close) flush immediately so terminal state survives a crash.
+// Default store is a no-op (unit tests + persistence-disabled boots); server/index.ts
+// swaps in the JSON store via initPersistence().
+// ---------------------------------------------------------------------------
+let store: SessionStore = createNoopStore();
+const dirty = new Set<string>();
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+const FLUSH_DEBOUNCE_MS = 1500;
+
+/** Install the durable store (called once from server boot). */
+export function initPersistence(s: SessionStore): void {
+  store = s;
+}
+
+/** Load persisted sessions into the Map (boot). `loaded` is already startedAt-sorted, so
+ *  Map insertion order — and therefore getAllSessions() order — matches. activeSessionId
+ *  stays null; the client's snapshot picks the most recent tab. */
+export function hydrateSessions(loaded: Session[]): void {
+  for (const s of loaded) sessions.set(s.sessionId, s);
+}
+
+function scheduleFlush(): void {
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    flushDirty();
+  }, FLUSH_DEBOUNCE_MS);
+  // Never let the flush timer keep the process alive on its own.
+  flushTimer.unref?.();
+}
+
+function markDirty(sessionId: string): void {
+  dirty.add(sessionId);
+  scheduleFlush();
+}
+
+function flushDirty(): void {
+  for (const id of dirty) {
+    const s = sessions.get(id);
+    if (s) store.save(s);
+  }
+  dirty.clear();
+}
+
+/** Persist one session right now (lifecycle transitions that must survive an immediate crash). */
+function flushNow(sessionId: string): void {
+  const s = sessions.get(sessionId);
+  if (s) store.save(s);
+  dirty.delete(sessionId);
+}
+
+/** Flush every pending session synchronously. Called from the shutdown handler. */
+export function flushAll(): void {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  flushDirty();
+}
 
 // ---------------------------------------------------------------------------
 // In-flight research guard
@@ -63,9 +129,10 @@ export function getSession(id: string): Session | null {
   return sessions.get(id) ?? null;
 }
 
-/** Returns all sessions in insertion (start) order — working and done. */
+/** Returns all visible sessions in insertion (start) order — working/done/interrupted.
+ *  Closed sessions are filtered out (they stay on disk + in the Map but are hidden from the UI). */
 export function getAllSessions(): Session[] {
-  return [...sessions.values()];
+  return [...sessions.values()].filter((s) => !s.closed);
 }
 
 /**
@@ -82,6 +149,12 @@ export function _resetStateForTest(): void {
   sessions.clear();
   inFlightResearch.clear();
   activeSessionId = null;
+  dirty.clear();
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  store = createNoopStore();
 }
 
 /** Max prompts retained per session. Beyond this, the goal (prompts[0]) and the most
@@ -122,11 +195,13 @@ export function startSession(
     }
     existing.prompt = existing.prompts.at(-1) ?? prompt; // latest = current focus
     activeSessionId = sessionId;
+    markDirty(sessionId);
     return { session: existing, continued: true };
   }
   const session = newSession(sessionId, prompt, Date.now());
   sessions.set(sessionId, session);
   activeSessionId = sessionId;
+  markDirty(sessionId);
   return { session, continued: false };
 }
 
@@ -134,6 +209,7 @@ export function addTouchPoint(sessionId: string, tp: TouchPoint): boolean {
   const s = sessions.get(sessionId);
   if (!s) return false;
   s.touchPoints.unshift(tp); // newest first
+  markDirty(sessionId);
   return true;
 }
 
@@ -201,6 +277,7 @@ export function setActivity(
   s.suggestedTopics = filterSuggestedTopics(s, update.topics);
   s.activityStatus = 'ready';
   s.activityError = null;
+  markDirty(sessionId);
   return entry;
 }
 
@@ -222,6 +299,7 @@ export function setActivityError(sessionId: string, error: string): boolean {
   if (!s) return false;
   s.activityStatus = 'error';
   s.activityError = error;
+  markDirty(sessionId);
   return true;
 }
 
@@ -231,6 +309,7 @@ export function setWaiting(sessionId: string, reason: string | null): boolean {
   if (s.status === 'done') return true;
   s.status = 'waiting';
   s.waitingReason = reason;
+  flushNow(sessionId); // lifecycle transition — persist immediately
   return true;
 }
 
@@ -241,6 +320,7 @@ export function clearWaiting(sessionId: string): boolean {
   if (s.status === 'waiting') {
     s.status = 'working';
     s.waitingReason = null;
+    markDirty(sessionId);
   }
   return true;
 }
@@ -251,6 +331,17 @@ export function finishSession(sessionId: string): boolean {
   s.status = 'done';
   s.waitingReason = null;
   s.finishedAt = Date.now();
+  flushNow(sessionId); // lifecycle transition — persist immediately
+  return true;
+}
+
+/** Marks a session closed (user dismissed the tab). Persisted so it stays hidden across
+ *  restarts; the snapshot filters closed sessions out. Data is kept on disk, not deleted. */
+export function closeSession(sessionId: string): boolean {
+  const s = sessions.get(sessionId);
+  if (!s) return false;
+  s.closed = true;
+  flushNow(sessionId);
   return true;
 }
 
@@ -263,5 +354,6 @@ export function addResearch(sessionId: string, result: ResearchResult): boolean 
   removeResearchInFlight(sessionId, result.topic);
   const k = topicKey(result.topic);
   s.suggestedTopics = s.suggestedTopics.filter((t) => topicKey(t.topic) !== k);
+  markDirty(sessionId);
   return true;
 }

@@ -16,8 +16,14 @@ import {
   addResearchInFlight,
   removeResearchInFlight,
   isResearchInFlight,
+  initPersistence,
+  hydrateSessions,
+  closeSession,
+  flushAll,
 } from './state.js';
-import { MAX_FOCUS } from '../src/types.js';
+import { MAX_FOCUS, newSession } from '../src/types.js';
+import type { Session } from '../src/types.js';
+import type { SessionStore } from './store.js';
 
 const topic = (t: string, reason = 'because') => ({ topic: t, reason });
 
@@ -390,5 +396,71 @@ describe('addResearch — chip removal', () => {
     expect(s.research).toHaveLength(1);
     expect(s.suggestedTopics.map((t) => t.topic)).toEqual(['Mermaid graph LR']);
     expect(isResearchInFlight('s', 'React useTransition')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Persistence wiring — write-through, hydrate, close
+// ---------------------------------------------------------------------------
+
+function recordingStore() {
+  const saved: Session[] = [];
+  const deleted: string[] = [];
+  const store: SessionStore = {
+    hydrate: () => [],
+    save: (s) => saved.push(s),
+    delete: (id) => deleted.push(id),
+    close: () => {},
+  };
+  return { store, saved, deleted };
+}
+
+describe('persistence wiring', () => {
+  it('finishSession flushes the session immediately (lifecycle transition)', () => {
+    const rec = recordingStore();
+    initPersistence(rec.store);
+    startSession('s', 'task');
+    finishSession('s');
+    expect(rec.saved.some((s) => s.sessionId === 's' && s.status === 'done')).toBe(true);
+  });
+
+  it('a touch marks dirty; flushAll writes it through', () => {
+    const rec = recordingStore();
+    initPersistence(rec.store);
+    startSession('s', 'task');
+    rec.saved.length = 0; // ignore the startSession write
+    addTouchPoint('s', { path: '/a.ts', tool: 'Write', ts: 1 });
+    expect(rec.saved).toHaveLength(0); // debounced — not written yet
+    flushAll();
+    expect(rec.saved.some((s) => s.sessionId === 's')).toBe(true);
+  });
+
+  it('closeSession persists a closed flag immediately and hides it from getAllSessions', () => {
+    const rec = recordingStore();
+    initPersistence(rec.store);
+    startSession('s', 'task');
+    expect(closeSession('s')).toBe(true);
+
+    expect(getSession('s')?.closed).toBe(true); // still in the Map
+    expect(getAllSessions().some((x) => x.sessionId === 's')).toBe(false); // hidden from UI
+    expect(rec.saved.some((x) => x.sessionId === 's' && x.closed)).toBe(true); // durable
+  });
+
+  it('closeSession returns false for an unknown session', () => {
+    expect(closeSession('ghost')).toBe(false);
+  });
+
+  it('hydrateSessions loads sessions into the Map; closed ones stay hidden', () => {
+    const open = { ...newSession('open', 'a', 1), status: 'done' as const, finishedAt: 2 };
+    const closed = {
+      ...newSession('closed', 'b', 1),
+      status: 'done' as const,
+      finishedAt: 2,
+      closed: true,
+    };
+    hydrateSessions([open, closed]);
+    expect(getSession('open')?.sessionId).toBe('open');
+    expect(getSession('closed')?.closed).toBe(true); // present in the Map
+    expect(getAllSessions().map((s) => s.sessionId)).toEqual(['open']); // closed filtered out
   });
 });

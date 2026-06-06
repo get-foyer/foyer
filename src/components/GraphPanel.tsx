@@ -1,13 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
 import DOMPurify from 'dompurify';
+import type { SessionStatus } from '../types';
 
 interface Props {
   graph: string | null;
   activityStatus: 'idle' | 'generating' | 'ready' | 'error';
   activityError: string | null;
   /** Lifecycle status of the session — drives the "thinking" state before the first graph arrives. */
-  sessionStatus: 'working' | 'waiting' | 'done' | null;
+  sessionStatus: SessionStatus | null;
 }
 
 let mermaidInitialized = false;

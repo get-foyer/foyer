@@ -1,5 +1,5 @@
 import type { ResearchLink } from '../../src/types.js';
-import type { TouchPoint, SuggestedTopic } from '../../src/types.js';
+import type { TouchPoint, SuggestedTopic, SessionStatus } from '../../src/types.js';
 import type { ProviderKind } from '../config.js';
 
 export type { SuggestedTopic };
@@ -32,7 +32,7 @@ export interface ActivityContext {
    */
   previousTopics: SuggestedTopic[];
   /** Session lifecycle status, so the storyline's terminal chip is accurate. */
-  status: 'working' | 'waiting' | 'done';
+  status: SessionStatus;
   /** Why the session is blocked on the user, if waiting (e.g. a permission prompt). */
   waitingReason: string | null;
 }

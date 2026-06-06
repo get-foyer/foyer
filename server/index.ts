@@ -15,7 +15,12 @@ import {
   isResearchInFlight,
   addResearchInFlight,
   removeResearchInFlight,
+  initPersistence,
+  hydrateSessions,
+  closeSession,
+  flushAll,
 } from './state.js';
+import { createJsonStore } from './store.js';
 import { broadcast } from './sse.js';
 import { summarizeNow, startStaleSessionWatcher } from './activity.js';
 
@@ -104,6 +109,18 @@ app.post('/activity', (req, res) => {
   res.status(202).json({});
 });
 
+// Close a session — persists a `closed` flag so the tab stays dismissed across restarts
+// (data is kept on disk, not deleted). Returns 200 even for unknown ids (idempotent).
+app.post('/close', (req, res) => {
+  const { sessionId } = req.body as { sessionId?: string };
+  if (!sessionId?.trim()) {
+    res.status(400).json({ error: 'sessionId is required' });
+    return;
+  }
+  closeSession(sessionId.trim());
+  res.status(200).json({});
+});
+
 // Status / health
 app.get('/api/status', (_req, res) => {
   const provider = getActiveProvider();
@@ -149,6 +166,26 @@ if (cfg.isDev) {
 // Boot
 // ---------------------------------------------------------------------------
 async function boot() {
+  // Persistence: install the JSON store and hydrate prior sessions before serving, so the
+  // first SSE snapshot already carries them. createJsonStore falls back to in-memory only
+  // if the data dir isn't writable — persistence failure never blocks the tool.
+  const store = createJsonStore(cfg.dataDir);
+  initPersistence(store);
+  const restored = store.hydrate();
+  hydrateSessions(restored);
+  if (restored.length > 0) {
+    console.log(`✓ Restored ${restored.length} session(s) from ${cfg.dataDir}`);
+  }
+
+  // Flush pending session writes on shutdown so the last state survives Ctrl-C / SIGTERM.
+  const shutdown = () => {
+    flushAll();
+    store.close();
+    process.exit(0);
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+
   // Initialize LLM provider
   try {
     const provider = await buildProvider(cfg.provider);

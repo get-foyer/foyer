@@ -49,6 +49,19 @@ describe('SessionTabs', () => {
     expect(tabs[1]).toHaveAttribute('title', 'Second task');
   });
 
+  it('renders an interrupted session with the interrupted status dot', () => {
+    render(
+      <SessionTabs
+        sessions={[makeSession({ sessionId: 'a', prompt: 'Cut off', status: 'interrupted' })]}
+        activeSessionId="a"
+        unseenSessionIds={[]}
+        onSelect={noop}
+        onClose={noop}
+      />,
+    );
+    expect(screen.getByLabelText('interrupted by a restart')).toBeTruthy();
+  });
+
   it('active tab has aria-current="true"', () => {
     const sessions = [
       makeSession({ sessionId: 'a', prompt: 'First task' }),
