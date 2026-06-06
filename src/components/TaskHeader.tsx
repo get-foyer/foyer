@@ -12,7 +12,8 @@ export function TaskHeader({ session, connectionStatus, provider }: Props) {
   const [elapsed, setElapsed] = useState<string>('');
 
   useEffect(() => {
-    if (!session || session.status === 'done') {
+    // 'done' and 'interrupted' are both terminal — show the final duration, don't tick.
+    if (!session || session.status === 'done' || session.status === 'interrupted') {
       if (session?.finishedAt && session.startedAt) {
         const total = session.finishedAt - session.startedAt;
         setElapsed(formatDuration(total));
@@ -78,13 +79,7 @@ export function TaskHeader({ session, connectionStatus, provider }: Props) {
   );
 }
 
-function StatusBadge({
-  status,
-  reason,
-}: {
-  status: 'working' | 'waiting' | 'done';
-  reason?: string | null;
-}) {
+function StatusBadge({ status, reason }: { status: Session['status']; reason?: string | null }) {
   return (
     <span
       className={`status-badge status-badge--${status}`}
@@ -100,6 +95,8 @@ function StatusBadge({
           <span className="status-badge__dot" aria-hidden="true" />
           Needs you
         </>
+      ) : status === 'interrupted' ? (
+        <>⚠ Interrupted</>
       ) : (
         <>✓ Done</>
       )}

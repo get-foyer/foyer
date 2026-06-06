@@ -212,6 +212,19 @@ body {
   flex-shrink: 0;
 }
 
+/* Interrupted: terminal but not clean (server died while live). Muted, no pulse. */
+.session-tab__dot--interrupted {
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
 .session-tab__body {
   flex: 1;
   display: flex;
@@ -299,6 +312,9 @@ body {
 }
 .task-header--done {
   background: color-mix(in srgb, var(--done) 4%, transparent);
+}
+.task-header--interrupted {
+  background: color-mix(in srgb, var(--text-muted) 4%, transparent);
 }
 .task-header--idle {
   background: transparent;
@@ -426,6 +442,13 @@ body {
   background: color-mix(in srgb, var(--done) 12%, transparent);
   color: var(--done);
   border: 1px solid color-mix(in srgb, var(--done) 25%, transparent);
+}
+
+/* Interrupted: terminal, recovered from disk after a restart. Muted, not alarming. */
+.status-badge--interrupted {
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--text-muted) 25%, transparent);
 }
 
 .status-badge__dot {

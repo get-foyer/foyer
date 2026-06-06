@@ -45,6 +45,14 @@ export function SessionTabs({
                     aria-label="needs your input"
                     role="status"
                   />
+                ) : session.status === 'interrupted' ? (
+                  <span
+                    className="session-tab__dot session-tab__dot--interrupted"
+                    aria-label="interrupted by a restart"
+                    role="status"
+                  >
+                    ⚠
+                  </span>
                 ) : (
                   <span className="session-tab__dot session-tab__dot--done" aria-hidden="true">
                     ✓
