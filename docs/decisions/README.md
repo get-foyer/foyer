@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-Non-trivial architecture decisions in Agent Foyer are recorded here as ADRs
+Non-trivial architecture decisions in Foyer Gate are recorded here as ADRs
 ([Michael Nygard format](https://github.com/joelparkerhenderson/architecture-decision-record):
 **Context / Decision / Consequences**).
 
@@ -22,3 +22,5 @@ new record, you don't rewrite history.
 
 - [0001 — Auto-captured research topics (suggest-and-click)](0001-auto-captured-research-topics.md)
 - [0002 — Session persistence (JSON-file store)](0002-session-persistence.md)
+- [0003 — Background research prefetch (warm the cache before the tap)](0003-background-research-prefetch.md)
+- [0004 — Conditional workflow graph (folded into Current Focus)](0004-conditional-workflow-graph.md)

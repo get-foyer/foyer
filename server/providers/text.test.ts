@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stripFences, normalizeTopics, normalizeWhitespace } from './text.js';
+import { stripFences, normalizeTopics, normalizeWhitespace, normalizeGraph } from './text.js';
 
 // ---------------------------------------------------------------------------
 // stripFences — canonical test suite (replaces the duplicate blocks that
@@ -63,6 +63,40 @@ describe('stripFences', () => {
   // flowchart variant
   it('handles flowchart LR syntax', () => {
     expect(stripFences('flowchart LR\n  A-->B')).toBe('flowchart LR\n  A-->B');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normalizeGraph — nullable graph (null = "no workflow warranted")
+// ---------------------------------------------------------------------------
+
+describe('normalizeGraph', () => {
+  it('returns null for null / undefined / non-string', () => {
+    expect(normalizeGraph(null)).toBeNull();
+    expect(normalizeGraph(undefined)).toBeNull();
+    expect(normalizeGraph(42)).toBeNull();
+    expect(normalizeGraph({})).toBeNull();
+  });
+
+  it('returns null for empty / whitespace-only / fence-only input', () => {
+    expect(normalizeGraph('')).toBeNull();
+    expect(normalizeGraph('   \n\t ')).toBeNull();
+    expect(normalizeGraph('```mermaid\n```')).toBeNull();
+  });
+
+  it('returns fence-stripped mermaid for a real graph', () => {
+    expect(normalizeGraph('```mermaid\ngraph LR\n  A-->B\n```')).toBe('graph LR\n  A-->B');
+  });
+
+  it('PRESERVES the intentional :::goal / :::active classDefs (the active-step highlight)', () => {
+    const g =
+      'graph LR\n  G(["Fix bug"]):::goal\n  G-->P["Patch"]:::active\n' +
+      '  classDef goal fill:#161b22,stroke:#4493f8,color:#fff;\n' +
+      '  classDef active fill:#1f6feb,stroke:#4493f8,color:#fff;';
+    const out = normalizeGraph(g);
+    expect(out).toContain(':::goal');
+    expect(out).toContain(':::active');
+    expect(out).toContain('classDef active');
   });
 });
 

@@ -1,14 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
 import DOMPurify from 'dompurify';
-import type { SessionStatus } from '../types';
 
 interface Props {
-  graph: string | null;
-  activityStatus: 'idle' | 'generating' | 'ready' | 'error';
-  activityError: string | null;
-  /** Lifecycle status of the session — drives the "thinking" state before the first graph arrives. */
-  sessionStatus: SessionStatus | null;
+  /**
+   * A non-null mermaid `graph LR` storyline. The parent (SummaryPanel) only mounts this
+   * component when a workflow is warranted AND a graph string exists, so there are no
+   * idle / empty / "incoming" states here — visibility is decided upstream.
+   */
+  graph: string;
 }
 
 let mermaidInitialized = false;
@@ -51,7 +51,15 @@ function ensureMermaid() {
   }
 }
 
-export function GraphPanel({ graph, activityStatus, activityError, sessionStatus }: Props) {
+/**
+ * Presentational renderer for the workflow storyline, folded into the Current Focus panel.
+ *
+ * Extracted from the former standalone GraphPanel. The mermaid init + render + DOMPurify
+ * sanitize (USE_PROFILES.svg, htmlLabels:false) + natural-width pin are UNCHANGED — that
+ * pipeline is security-critical and is asserted by graphSanitize.test.ts. The intentional
+ * `:::goal` / `:::active` classDefs (the active-step highlight) flow through untouched.
+ */
+export function WorkflowGraph({ graph }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
   const idRef = useRef(0);
@@ -61,11 +69,17 @@ export function GraphPanel({ graph, activityStatus, activityError, sessionStatus
     ensureMermaid();
     setRenderError(null);
 
+    // mermaid.render is async; `graph` can change (every activity tick) before a render
+    // resolves. Without this guard, two in-flight renders race and the later-resolving one
+    // clobbers the container with a stale storyline. The cleanup flips `cancelled` so a
+    // superseded render's .then/.catch becomes a no-op.
+    let cancelled = false;
     const id = `foyer-graph-${++idRef.current}`;
 
     mermaid
       .render(id, graph)
       .then(({ svg }) => {
+        if (cancelled) return;
         if (containerRef.current) {
           // Sanitize the SVG before injecting to prevent XSS.
           // USE_PROFILES.svg permits SVG elements while stripping script/handlers.
@@ -76,7 +90,7 @@ export function GraphPanel({ graph, activityStatus, activityError, sessionStatus
           const svgEl = containerRef.current.querySelector('svg');
           if (svgEl) {
             // The storyline is a horizontal strip (graph LR). Render it at its
-            // NATURAL width and let the container (.graph-panel__svg, overflow:auto)
+            // NATURAL width and let the container (.workflow-graph__svg, overflow:auto)
             // scroll horizontally — clamping to maxWidth:100% downscales a wide
             // strip into an unreadable sliver, which was the old behaviour. We
             // read the intrinsic width from the viewBox and pin it so mermaid's
@@ -92,55 +106,25 @@ export function GraphPanel({ graph, activityStatus, activityError, sessionStatus
         }
       })
       .catch((err: unknown) => {
+        if (cancelled) return;
         setRenderError(err instanceof Error ? err.message : String(err));
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [graph]);
 
-  return (
-    <section className="panel graph-panel">
-      <h2 className="panel__title">
-        Workflow
-        {activityStatus === 'generating' && (
-          <span className="panel__badge panel__badge--generating">Updating…</span>
-        )}
-      </h2>
+  if (renderError) {
+    return (
+      <div className="workflow-graph__error">
+        <p className="error-label">⚠ Graph generation failed</p>
+        <pre className="error-detail">{renderError}</pre>
+        <p className="panel__hint">Raw mermaid output:</p>
+        <pre className="workflow-graph__raw">{graph}</pre>
+      </div>
+    );
+  }
 
-      {activityStatus === 'idle' && graph === null && sessionStatus === 'working' && (
-        // Agent is working but no graph yet — pulse hint instead of static empty card
-        <div className="graph-panel__generating">
-          <span className="spinner" />
-          <span>Workflow diagram incoming…</span>
-        </div>
-      )}
-
-      {activityStatus === 'idle' && graph === null && sessionStatus !== 'working' && (
-        <div className="panel__empty">
-          <span className="panel__empty-glyph">◱</span>
-          <p>Graph appears as the agent works.</p>
-        </div>
-      )}
-
-      {activityStatus === 'generating' && graph === null && (
-        <div className="graph-panel__generating">
-          <span className="spinner" />
-          <span>Building workflow diagram…</span>
-        </div>
-      )}
-
-      {(activityStatus === 'error' || renderError) && (
-        <div className="graph-panel__error">
-          <p className="error-label">⚠ Graph generation failed</p>
-          <pre className="error-detail">{activityError ?? renderError}</pre>
-          {graph && (
-            <>
-              <p className="panel__hint">Raw mermaid output:</p>
-              <pre className="graph-panel__raw">{graph}</pre>
-            </>
-          )}
-        </div>
-      )}
-
-      {graph && !renderError && <div className="graph-panel__svg" ref={containerRef} />}
-    </section>
-  );
+  return <div className="workflow-graph__svg" ref={containerRef} />;
 }

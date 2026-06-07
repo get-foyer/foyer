@@ -107,6 +107,10 @@ export function normalizeSession(raw: unknown): Session | null {
     sessionId: s.sessionId,
     prompts: Array.isArray(s.prompts) && s.prompts.length > 0 ? s.prompts : base.prompts,
     turnSeq: typeof s.turnSeq === 'number' ? s.turnSeq : base.turnSeq,
+    // Sessions persisted before this field existed (or with a malformed value) load as null —
+    // no workflow shown until the next activity tick re-decides. base default = null.
+    workflowTurnSeq:
+      typeof s.workflowTurnSeq === 'number' ? s.workflowTurnSeq : base.workflowTurnSeq,
     focusHistory: Array.isArray(s.focusHistory) ? s.focusHistory : base.focusHistory,
     touchPoints: Array.isArray(s.touchPoints) ? s.touchPoints : base.touchPoints,
     research: Array.isArray(s.research) ? s.research : base.research,

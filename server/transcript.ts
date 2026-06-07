@@ -99,6 +99,94 @@ export async function readTranscriptTail(
 }
 
 /**
+ * Read the HEAD of a JSONL transcript and return the original user prompt — the
+ * first genuine user message, which is the task the developer typed.
+ *
+ * Used by server/hooks.ts to give a resumed/picked-up session a real tab title
+ * instead of the "(resumed session)" placeholder, when Foyer first sees a session
+ * via a PostToolUse/Notification hook (mid-turn) rather than UserPromptSubmit.
+ *
+ * Returns `null` if the file is missing/unreadable or no user prompt is found in
+ * the first `maxBytes`. The caller is expected to fall back to a weaker title.
+ */
+export async function readFirstUserPrompt(
+  transcriptPath: string,
+  maxBytes: number = TAIL_BYTES,
+): Promise<string | null> {
+  let fileSize: number;
+  try {
+    const s = await stat(transcriptPath);
+    fileSize = s.size;
+  } catch {
+    return null; // file not found or inaccessible
+  }
+
+  const stream = createReadStream(transcriptPath, {
+    start: 0,
+    end: maxBytes - 1,
+    encoding: 'utf-8',
+  });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+
+  const lines: string[] = [];
+  for await (const line of rl) {
+    lines.push(line);
+  }
+
+  // Only when the file was actually truncated by maxBytes is the last line possibly
+  // a partial cut — drop it then. If the whole file fit, every line is complete.
+  const truncated = fileSize > maxBytes;
+  const safeLines = truncated && lines.length > 1 ? lines.slice(0, -1) : lines;
+
+  for (const line of safeLines) {
+    if (!line.trim()) continue;
+    let entry: Record<string, unknown>;
+    try {
+      entry = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue; // malformed JSONL line — skip without throwing
+    }
+
+    if (entry.type !== 'user') continue;
+    if (entry.isMeta === true) continue; // Claude Code injected/meta message
+
+    const msg = entry.message as Record<string, unknown> | undefined;
+    const content = msg?.content;
+
+    // Content is either a plain string, or an array of blocks (text / tool_result).
+    let text = '';
+    if (typeof content === 'string') {
+      text = content;
+    } else if (Array.isArray(content)) {
+      for (const block of content as Array<Record<string, unknown>>) {
+        if (block.type === 'text' && typeof block.text === 'string') {
+          text = block.text;
+          break; // first text block wins; tool_result blocks are ignored
+        }
+      }
+    }
+
+    // Strip system-reminder wrappers the harness injects into the first message.
+    const cleaned = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+    if (!cleaned) continue;
+
+    // Skip slash-command / local-command / caveat wrappers — not the real task.
+    if (
+      cleaned.startsWith('<command-name>') ||
+      cleaned.startsWith('<command-message>') ||
+      cleaned.startsWith('<local-command-stdout>') ||
+      cleaned.startsWith('Caveat:')
+    ) {
+      continue;
+    }
+
+    return cleaned.slice(0, 200).trim();
+  }
+
+  return null;
+}
+
+/**
  * Returns the byte size of the transcript file, or null if it does not exist.
  * Used by server/activity.ts for skip-if-unchanged change detection.
  */

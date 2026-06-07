@@ -76,6 +76,26 @@ export function stripFences(code: string): string {
 }
 
 /**
+ * Normalize a provider's raw `graph` field into either a clean mermaid string or `null`.
+ *
+ * `null` is a FIRST-CLASS answer: it means "this work does not warrant a workflow graph" (a
+ * single-step task, a quick Q&A, trivial linear work). The dashboard then shows no workflow
+ * region at all instead of a thin one-node placeholder. Shared by all three providers so the
+ * "when is there no workflow" rule lives in ONE place (this replaced the old per-provider
+ * `?? FALLBACK_GRAPH` triplication).
+ *
+ * Returns null when: the field is missing/non-string, empty, whitespace-only, or reduces to
+ * empty after fence-stripping. Otherwise returns the fence-stripped mermaid (which KEEPS the
+ * intentional `:::goal`/`:::active` classDefs that drive the active-step highlight).
+ */
+export function normalizeGraph(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  if (!raw.trim()) return null;
+  const stripped = stripFences(raw);
+  return stripped.trim() ? stripped : null;
+}
+
+/**
  * Normalize text for equality comparison (focus-history de-dup).
  *
  * Lower-cases, trims, and collapses all runs of whitespace to a single space so two

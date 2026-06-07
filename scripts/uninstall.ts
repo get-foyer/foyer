@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Agent Foyer — uninstall hooks.
+ * Foyer Gate — uninstall hooks.
  *
  * Reads the port from .env (or defaults to 4317) and strips only the hooks
  * that point to http://localhost:<port>/hook. All other hooks are preserved.
@@ -19,7 +19,7 @@ const PROJECT_ROOT = join(__dirname, '..');
 loadDotenv({ path: join(PROJECT_ROOT, '.env') });
 
 async function main() {
-  console.log('\n🚪 Agent Foyer — Uninstall\n');
+  console.log('\n🚪 Foyer Gate — Uninstall\n');
 
   const port = parseInt(process.env.FOYER_PORT ?? '4317', 10);
   const hookUrl = `http://localhost:${port}/hook`;

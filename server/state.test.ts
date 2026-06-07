@@ -19,9 +19,11 @@ import {
   initPersistence,
   hydrateSessions,
   closeSession,
+  setSessionEndListener,
   flushAll,
+  markPlanned,
 } from './state.js';
-import { MAX_FOCUS, newSession } from '../src/types.js';
+import { MAX_FOCUS, newSession, isWorkflowVisible } from '../src/types.js';
 import type { Session } from '../src/types.js';
 import type { SessionStore } from './store.js';
 
@@ -40,6 +42,28 @@ const act = (over: Partial<Parameters<typeof setActivity>[1]> = {}) => ({
 
 beforeEach(() => {
   _resetStateForTest();
+  setSessionEndListener(null); // module-level; reset so listener tests don't bleed
+});
+
+// ---------------------------------------------------------------------------
+// session-end listener (prefetch cache cleanup hook)
+// ---------------------------------------------------------------------------
+
+describe('setSessionEndListener', () => {
+  it('fires on finishSession with the session id (frees prefetch state on natural end)', () => {
+    const ended: string[] = [];
+    setSessionEndListener((id) => ended.push(id));
+    startSession('s1', 'work');
+    finishSession('s1');
+    expect(ended).toEqual(['s1']);
+  });
+
+  it('does not fire when finishSession is a no-op (unknown session)', () => {
+    const ended: string[] = [];
+    setSessionEndListener((id) => ended.push(id));
+    expect(finishSession('nope')).toBe(false);
+    expect(ended).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -300,6 +324,108 @@ describe('focus history', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Workflow visibility — setActivity sticky decision + ephemeral plan-mode floor
+// ---------------------------------------------------------------------------
+
+describe('workflow visibility — setActivity sticky + planned floor', () => {
+  it('a non-null graph shows the workflow for that turn', () => {
+    startSession('s', 'goal');
+    setActivity('s', act({ graph: 'graph LR\n  G:::goal', turnSeq: 1 }));
+    const s = getSession('s')!;
+    expect(s.workflowTurnSeq).toBe(1);
+    expect(isWorkflowVisible(s)).toBe(true);
+    expect(s.graph).toBe('graph LR\n  G:::goal');
+  });
+
+  it('a null graph on a non-planned turn does NOT show the workflow', () => {
+    startSession('s', 'goal');
+    setActivity('s', act({ graph: null, turnSeq: 1 }));
+    const s = getSession('s')!;
+    expect(s.workflowTurnSeq).toBeNull();
+    expect(isWorkflowVisible(s)).toBe(false);
+    expect(s.graph).toBeNull();
+  });
+
+  it('markPlanned floors visibility ON even when the model returns a null graph', () => {
+    startSession('s', 'goal');
+    markPlanned('s'); // ExitPlanMode fired on turn 1
+    setActivity('s', act({ graph: null, turnSeq: 1 }));
+    const s = getSession('s')!;
+    expect(s.workflowTurnSeq).toBe(1); // shown via the plan-mode floor
+    expect(isWorkflowVisible(s)).toBe(true);
+    expect(s.graph).toBeNull(); // ...but no storyline yet → SummaryPanel shows "Sketching…"
+  });
+
+  it('is sticky within a turn: a later null tick keeps both the graph and the visibility', () => {
+    startSession('s', 'goal');
+    setActivity('s', act({ graph: 'graph LR\n  A:::goal', turnSeq: 1 }));
+    setActivity('s', act({ graph: null, turnSeq: 1 })); // a quieter tick, same turn
+    const s = getSession('s')!;
+    expect(s.workflowTurnSeq).toBe(1);
+    expect(isWorkflowVisible(s)).toBe(true);
+    expect(s.graph).toBe('graph LR\n  A:::goal'); // never overwritten with null (monotonic)
+  });
+
+  it('re-decides fresh on a new turn: a trivial turn-2 hides the turn-1 workflow', () => {
+    startSession('s', 'goal'); // turn 1
+    setActivity('s', act({ graph: 'graph LR\n  A:::goal', turnSeq: 1 }));
+    startSession('s', 'tiny follow-up'); // bump → turn 2
+    setActivity('s', act({ graph: null, turnSeq: 2 }));
+    const s = getSession('s')!;
+    expect(s.turnSeq).toBe(2);
+    expect(s.workflowTurnSeq).toBe(1); // stamp is now stale
+    expect(isWorkflowVisible(s)).toBe(false); // hidden on turn 2
+    expect(s.graph).toBe('graph LR\n  A:::goal'); // storyline content survives the hidden turn
+  });
+
+  it('re-shows on a later multi-phase turn with the extended storyline', () => {
+    startSession('s', 'goal'); // turn 1
+    setActivity('s', act({ graph: 'graph LR\n  A:::goal', turnSeq: 1 }));
+    startSession('s', 'trivial'); // turn 2
+    setActivity('s', act({ graph: null, turnSeq: 2 }));
+    startSession('s', 'big follow-up'); // turn 3
+    setActivity('s', act({ graph: 'graph LR\n  A-->B:::active', turnSeq: 3 }));
+    const s = getSession('s')!;
+    expect(s.turnSeq).toBe(3);
+    expect(s.workflowTurnSeq).toBe(3);
+    expect(isWorkflowVisible(s)).toBe(true);
+    expect(s.graph).toBe('graph LR\n  A-->B:::active');
+  });
+
+  it('a non-null pivot graph overwrites the previous storyline (content is not frozen)', () => {
+    startSession('s', 'goal');
+    setActivity('s', act({ graph: 'graph LR\n  A:::goal', turnSeq: 1 }));
+    setActivity('s', act({ graph: 'graph LR\n  PIVOT:::goal', turnSeq: 1 }));
+    expect(getSession('s')!.graph).toBe('graph LR\n  PIVOT:::goal');
+  });
+
+  it('drops the plan-mode marker on finish so it cannot leak into a reopened turn', () => {
+    startSession('s', 'goal');
+    markPlanned('s');
+    finishSession('s'); // clears the ephemeral marker
+    startSession('s', 'reopened'); // turn 2, NOT planned
+    setActivity('s', act({ graph: null, turnSeq: 2 }));
+    expect(isWorkflowVisible(getSession('s')!)).toBe(false); // no stale plan floor
+  });
+});
+
+describe('isWorkflowVisible', () => {
+  it('false when workflowTurnSeq is null', () => {
+    expect(isWorkflowVisible(newSession('s', 'g', 1))).toBe(false);
+  });
+  it('true when workflowTurnSeq === turnSeq', () => {
+    expect(isWorkflowVisible({ ...newSession('s', 'g', 1), turnSeq: 4, workflowTurnSeq: 4 })).toBe(
+      true,
+    );
+  });
+  it('false when workflowTurnSeq is stale (!== turnSeq)', () => {
+    expect(isWorkflowVisible({ ...newSession('s', 'g', 1), turnSeq: 5, workflowTurnSeq: 3 })).toBe(
+      false,
+    );
+  });
+});
+
 describe('resolveResearchSession', () => {
   it('returns the session matching the provided id', () => {
     startSession('a', 'Task A');
@@ -444,6 +570,32 @@ describe('persistence wiring', () => {
     expect(getSession('s')?.closed).toBe(true); // still in the Map
     expect(getAllSessions().some((x) => x.sessionId === 's')).toBe(false); // hidden from UI
     expect(rec.saved.some((x) => x.sessionId === 's' && x.closed)).toBe(true); // durable
+  });
+
+  it('re-prompting a closed session re-opens it (closed=false) and flushes immediately (D5)', () => {
+    const rec = recordingStore();
+    initPersistence(rec.store);
+    startSession('s', 'task');
+    closeSession('s');
+    expect(getSession('s')?.closed).toBe(true);
+    rec.saved.length = 0; // ignore the close write
+    // A fresh prompt un-dismisses the session.
+    startSession('s', 'back to work');
+    expect(getSession('s')?.closed).toBe(false);
+    expect(getAllSessions().some((x) => x.sessionId === 's')).toBe(true); // visible again
+    // The closed→open transition flushes immediately (durable across a crash).
+    expect(rec.saved.some((x) => x.sessionId === 's')).toBe(true);
+  });
+
+  it('a normal continue of an open session does not flush eagerly (no write amplification, 2nd-pass D2)', () => {
+    const rec = recordingStore();
+    initPersistence(rec.store);
+    startSession('s', 'task'); // new session — debounced markDirty
+    rec.saved.length = 0; // ignore the create write
+    startSession('s', 'turn 2'); // continue of an OPEN session
+    expect(getSession('s')?.closed).toBeFalsy();
+    // No closed→open transition → no flushNow; the write stays debounced (nothing saved yet).
+    expect(rec.saved).toHaveLength(0);
   });
 
   it('closeSession returns false for an unknown session', () => {

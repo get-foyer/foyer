@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Markdown } from './Markdown';
+import { WorkflowGraph } from './WorkflowGraph';
 import type { Session, FocusEntry } from '../types';
 
 interface Props {
@@ -11,6 +12,11 @@ interface Props {
   error: string | null;
   /** Lifecycle status of the session — drives the "thinking" state before the first summary arrives. */
   sessionStatus: Session['status'] | null;
+  /** The mermaid `graph LR` storyline to fold in above the narration. Null until one is drawn. */
+  graph: string | null;
+  /** Whether a workflow graph should be shown this turn (hybrid trigger + sticky, decided
+   *  server-side via isWorkflowVisible). When false, no workflow region is rendered at all. */
+  showWorkflow: boolean;
 }
 
 /**
@@ -38,7 +44,15 @@ function firstLine(md: string): string {
   return line.replace(/^[#>\-*\s]+/, '').trim();
 }
 
-export function SummaryPanel({ summary, focusHistory, status, error, sessionStatus }: Props) {
+export function SummaryPanel({
+  summary,
+  focusHistory,
+  status,
+  error,
+  sessionStatus,
+  graph,
+  showWorkflow,
+}: Props) {
   // Prefer the latest retained entry; fall back to the raw `summary` (e.g. before the first
   // entry is appended, or a no-append refresh that still updated the live text).
   const current = focusHistory[0]?.summary ?? summary;
@@ -52,6 +66,24 @@ export function SummaryPanel({ summary, focusHistory, status, error, sessionStat
           <span className="panel__badge panel__badge--generating">Updating…</span>
         )}
       </h2>
+
+      {/* Workflow storyline, folded in above the narration — shown ONLY when this turn warrants
+          it (multi-phase work or plan mode). A trivial task renders no workflow region at all.
+          `graph` may briefly be null while a warranted graph is still being drawn (e.g. right
+          after plan mode), so we show a one-line "Sketching…" hint rather than empty chrome. */}
+      {showWorkflow && (
+        <div className="summary-panel__workflow">
+          <span className="summary-panel__workflow-label">Workflow</span>
+          {graph ? (
+            <WorkflowGraph graph={graph} />
+          ) : (
+            <div className="summary-panel__workflow-sketching">
+              <span className="spinner spinner--sm" />
+              <span>Sketching workflow…</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {current !== null ? (
         <div className="summary-panel__content">

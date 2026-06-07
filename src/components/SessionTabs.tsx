@@ -1,10 +1,17 @@
 import React from 'react';
 import type { Session } from '../types';
+import { JumpToLive } from './JumpToLive';
 
 interface Props {
   sessions: Session[];
   activeSessionId: string | null;
+  /** Server's most-recently-prompted session — drives the FOLLOW catch-up affordance. */
+  liveSessionId: string | null;
+  /** Whether the view auto-tracks live prompts ('follow') or is pinned to a tab ('held'). */
+  followMode: 'follow' | 'held';
   unseenSessionIds: string[];
+  /** Resume following + jump to the live session. */
+  onFollow: () => void;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
 }
@@ -12,12 +19,29 @@ interface Props {
 export function SessionTabs({
   sessions,
   activeSessionId,
+  liveSessionId,
+  followMode,
   unseenSessionIds,
+  onFollow,
   onSelect,
   onClose,
 }: Props) {
+  // Held AND a different (visible) session is live → there's a channel to catch up to.
+  // (Following is the silent default — no control. The pill is the only re-engage affordance.)
+  const liveSession =
+    followMode === 'held' && liveSessionId !== null && liveSessionId !== activeSessionId
+      ? (sessions.find((s) => s.sessionId === liveSessionId) ?? null)
+      : null;
+
   return (
     <nav className="app__sidebar" aria-label="Agent sessions">
+      {/* Persistent aria-live region (zero footprint when empty) so the pill is announced
+          when it appears; the pill itself renders only when there's somewhere to jump. */}
+      <div className="jump-to-live-region" aria-live="polite">
+        {liveSession && (
+          <JumpToLive liveLabel={liveSession.prompt || 'A session'} onFollow={onFollow} />
+        )}
+      </div>
       {sessions.length === 0 ? (
         <p className="app__sidebar-empty">No sessions yet</p>
       ) : (

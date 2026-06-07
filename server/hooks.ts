@@ -5,6 +5,7 @@
  * All heavy work (activity summarisation) happens asynchronously after the response.
  */
 import type { Request, Response } from 'express';
+import { basename } from 'path';
 import {
   startSession,
   addTouchPoint,
@@ -12,6 +13,7 @@ import {
   clearWaiting,
   finishSession,
   getSession,
+  markPlanned,
 } from './state.js';
 import { broadcast } from './sse.js';
 import {
@@ -21,6 +23,7 @@ import {
   stopTranscriptWatcher,
   resetSummarizeBaseline,
 } from './activity.js';
+import { readFirstUserPrompt } from './transcript.js';
 import { isSelfOriginatedHook } from './providers/internal.js';
 
 // ---------------------------------------------------------------------------
@@ -145,8 +148,10 @@ export async function handleHook(req: Request, res: Response): Promise<void> {
         break;
       case 'PreToolUse':
         if (payload.tool_name === 'ExitPlanMode') {
-          // Agent approved the plan — trigger immediate summarisation
+          // Agent approved the plan — a planned task is inherently multi-phase, so flag this
+          // turn (hybrid workflow floor) before the immediate summarisation reads it.
           clearWaiting(sessionId);
+          markPlanned(sessionId);
           summarizeNow(sessionId);
         } else if (payload.tool_name === 'AskUserQuestion') {
           // Extract the first question text from the `questions` array
@@ -180,12 +185,35 @@ export async function handleHook(req: Request, res: Response): Promise<void> {
 // Event handlers
 // ---------------------------------------------------------------------------
 
+/**
+ * Best-effort title for a session Foyer first sees mid-turn (no UserPromptSubmit
+ * carrying the prompt). Without this, every such tab reads "(resumed session)".
+ * Tries, in order: the original task from the transcript head → the project
+ * folder name from cwd → the bare placeholder.
+ */
+async function recoverTitle(p: HookPayload): Promise<string> {
+  if (p.transcript_path) {
+    const first = await readFirstUserPrompt(p.transcript_path);
+    if (first) return first;
+  }
+  if (p.cwd) {
+    const base = basename(p.cwd);
+    if (base) return `(resumed: ${base})`;
+  }
+  return '(resumed session)';
+}
+
 async function onUserPrompt(sessionId: string, p: HookPayload): Promise<void> {
   const prompt = (p.prompt ?? '').trim() || '(no prompt)';
   const { session, continued } = startSession(sessionId, prompt);
   // Record the transcript path immediately — activity.ts uses it for summarisation context
   recordTranscriptPath(sessionId, p.transcript_path);
   broadcast('task', { sessionId, prompt, prompts: session.prompts, startedAt: session.startedAt });
+  // Focus signal: a genuine user prompt makes this the live channel. Emitted ONLY here (never
+  // on the agent-driven `task` broadcasts in onPostToolUse / onNotification), so the dashboard
+  // follows where you're interacting without being yanked by autonomous agent activity. Must
+  // come AFTER `task` so the client has the session before it's asked to focus it (SSE is ordered).
+  broadcast('active', { sessionId });
   // On a follow-up prompt (continue), the transcript may not have grown past the last
   // summary yet — force the next run so the new focus is reflected immediately.
   if (continued) resetSummarizeBaseline(sessionId);
@@ -225,9 +253,11 @@ async function onPostToolUse(sessionId: string, p: HookPayload): Promise<void> {
   const tp = { path: filePath, tool: toolName, ts: Date.now() };
   const ok = addTouchPoint(sessionId, tp);
 
-  // If this is an unknown session (e.g. server restarted mid-task), start a minimal one
+  // If this is an unknown session (e.g. server restarted mid-task), resume it with a
+  // real title recovered from the transcript instead of an opaque placeholder.
   if (!ok) {
-    startSession(sessionId, '(resumed session)');
+    const title = await recoverTitle(p);
+    startSession(sessionId, title);
     addTouchPoint(sessionId, tp);
   }
 
@@ -252,12 +282,14 @@ async function onNotification(sessionId: string, p: HookPayload): Promise<void> 
 
   const ok = setWaiting(sessionId, reason);
   if (!ok) {
-    // Unknown session (e.g. server restarted mid-task) — resume minimally.
+    // Unknown session (e.g. server restarted mid-task) — resume with a real title
+    // recovered from the transcript instead of an opaque placeholder.
     // Broadcast `task` first so the client adds the session before the `waiting` event arrives.
-    const { session: s } = startSession(sessionId, '(resumed session)');
+    const title = await recoverTitle(p);
+    const { session: s } = startSession(sessionId, title);
     broadcast('task', {
       sessionId,
-      prompt: '(resumed session)',
+      prompt: title,
       prompts: s.prompts,
       startedAt: s.startedAt,
     });

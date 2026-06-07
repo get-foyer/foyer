@@ -162,7 +162,7 @@ describe('installCodexHooks', () => {
     expect(raw).toContain('Stop');
     // Command should reference the shim and our marker
     expect(raw).toContain(SHIM_PATH);
-    expect(raw).toContain('agent-foyer-managed');
+    expect(raw).toContain('foyer-gate-managed');
   });
 
   it('is idempotent — running twice does not duplicate entries', async () => {
@@ -170,7 +170,7 @@ describe('installCodexHooks', () => {
     await installCodexHooks(codexConfigPath, SHIM_PATH, PORT);
     const raw = await readFile(codexConfigPath, 'utf-8');
     // The marker should appear exactly once per event (4 events)
-    const markerOccurrences = (raw.match(/agent-foyer-managed/g) ?? []).length;
+    const markerOccurrences = (raw.match(/foyer-gate-managed/g) ?? []).length;
     expect(markerOccurrences).toBe(4); // one per event
   });
 
@@ -207,7 +207,7 @@ describe('uninstallCodexHooks', () => {
     const raw = await readFile(codexConfigPath, 'utf-8');
 
     // Our marker is gone
-    expect(raw).not.toContain('agent-foyer-managed');
+    expect(raw).not.toContain('foyer-gate-managed');
     // Foreign config preserved
     expect(raw).toContain('sk-test');
   });

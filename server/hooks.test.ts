@@ -4,8 +4,11 @@
  * Uses the real state module (reset between tests) and mocks SSE/activity so
  * we can assert on session creation without spawning real subprocesses.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Request, Response } from 'express';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
 
 // vi.mock() is hoisted by vitest — these factories run before any imports.
 
@@ -21,7 +24,8 @@ vi.mock('./activity.js', () => ({
 }));
 
 import { handleHook } from './hooks.js';
-import { _resetStateForTest, getAllSessions } from './state.js';
+import { _resetStateForTest, getAllSessions, getSession, setActivity } from './state.js';
+import { isWorkflowVisible } from '../src/types.js';
 import { broadcast } from './sse.js';
 import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './providers/internal.js';
 
@@ -261,5 +265,216 @@ describe('handleHook passthrough for genuine events', () => {
     // Touchpoint from turn 1 survives the follow-up prompt
     expect(sessions[0].touchPoints).toHaveLength(1);
     expect(sessions[0].touchPoints[0].path).toBe('/src/feature.ts');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ExitPlanMode → plan-mode workflow floor (markPlanned)
+// ---------------------------------------------------------------------------
+
+describe('handleHook ExitPlanMode → workflow floor', () => {
+  it('marks the turn planned so the workflow shows even when the model returns a null graph', async () => {
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'plan-sess',
+        cwd: '/home/user/project',
+        prompt: 'Build a thing with a plan',
+      }),
+      fakeRes(),
+    );
+    // Agent approves the plan → PreToolUse(ExitPlanMode) → markPlanned for turn 1.
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'PreToolUse',
+        session_id: 'plan-sess',
+        cwd: '/home/user/project',
+        tool_name: 'ExitPlanMode',
+        tool_input: {},
+      }),
+      fakeRes(),
+    );
+    // A summarize tick that draws NO graph still shows the workflow (the plan-mode floor).
+    setActivity('plan-sess', {
+      summary: 'getting started',
+      graph: null,
+      topics: [],
+      turnSeq: 1,
+      turnPrompt: 'Build a thing with a plan',
+      allowAppend: true,
+    });
+    expect(isWorkflowVisible(getSession('plan-sess')!)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// active focus signal — emitted ONLY on genuine user prompts (never on the
+// agent-driven `task` re-broadcasts), so the dashboard follows YOUR interaction.
+// ---------------------------------------------------------------------------
+
+describe('handleHook active focus signal', () => {
+  it('emits `active` on a real UserPromptSubmit', async () => {
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'focus-1',
+        cwd: '/home/user/project',
+        prompt: 'Do the thing',
+      }),
+      fakeRes(),
+    );
+    expect(broadcast).toHaveBeenCalledWith('active', { sessionId: 'focus-1' });
+  });
+
+  it('does NOT emit `active` when a PostToolUse clears a waiting session (agent-driven)', async () => {
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'focus-2',
+        cwd: '/home/user/project',
+        prompt: 'Start',
+      }),
+      fakeRes(),
+    );
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'Notification',
+        session_id: 'focus-2',
+        cwd: '/home/user/project',
+        notification_type: 'permission_prompt',
+        message: 'Allow Bash?',
+      }),
+      fakeRes(),
+    );
+    vi.mocked(broadcast).mockClear();
+    // A tool completes → clears waiting, re-broadcasts `task`, but must NOT steal focus.
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'PostToolUse',
+        session_id: 'focus-2',
+        cwd: '/home/user/project',
+        tool_name: 'Write',
+        tool_input: { file_path: '/src/x.ts' },
+      }),
+      fakeRes(),
+    );
+    expect(broadcast).toHaveBeenCalledWith(
+      'task',
+      expect.objectContaining({ sessionId: 'focus-2' }),
+    );
+    expect(broadcast).not.toHaveBeenCalledWith('active', expect.anything());
+  });
+
+  it('does NOT emit `active` when an unknown session is resumed via Notification', async () => {
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'Notification',
+        session_id: 'focus-3',
+        cwd: '/home/user/project',
+        notification_type: 'permission_prompt',
+        message: 'Allow Bash?',
+      }),
+      fakeRes(),
+    );
+    expect(broadcast).toHaveBeenCalledWith(
+      'task',
+      expect.objectContaining({ sessionId: 'focus-3' }),
+    );
+    expect(broadcast).not.toHaveBeenCalledWith('active', expect.anything());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Resumed-session title recovery — a hook for an UNKNOWN session (Foyer started
+// mid-turn) must recover a real title from the transcript instead of showing the
+// "(resumed session)" placeholder.
+// ---------------------------------------------------------------------------
+
+describe('handleHook resumed-session title recovery', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'foyer-hooks-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function writeTranscript(prompt: string): Promise<string> {
+    const path = join(tempDir, 'transcript.jsonl');
+    const lines = [
+      JSON.stringify({ type: 'user', message: { content: prompt } }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } }),
+    ];
+    await writeFile(path, lines.join('\n'), 'utf-8');
+    return path;
+  }
+
+  it('PostToolUse for an unknown session uses the transcript prompt as the title', async () => {
+    const transcript = await writeTranscript('Refactor the billing service');
+
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'PostToolUse',
+        session_id: 'unknown-1',
+        cwd: '/home/user/billing',
+        transcript_path: transcript,
+        tool_name: 'Write',
+        tool_input: { file_path: '/src/billing.ts' },
+      }),
+      fakeRes(),
+    );
+
+    const s = getSession('unknown-1');
+    expect(s).not.toBeNull();
+    expect(s!.prompt).toBe('Refactor the billing service');
+    expect(s!.prompt).not.toBe('(resumed session)');
+    // The touchpoint is still recorded after the resume.
+    expect(s!.touchPoints[0].path).toBe('/src/billing.ts');
+  });
+
+  it('falls back to the cwd folder name when the transcript has no usable prompt', async () => {
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'PostToolUse',
+        session_id: 'unknown-2',
+        cwd: '/home/user/my-cool-app',
+        // no transcript_path → recovery skips straight to cwd basename
+        tool_name: 'Write',
+        tool_input: { file_path: '/src/x.ts' },
+      }),
+      fakeRes(),
+    );
+
+    const s = getSession('unknown-2');
+    expect(s).not.toBeNull();
+    expect(s!.prompt).toBe('(resumed: my-cool-app)');
+  });
+
+  it('Notification for an unknown session recovers the title and broadcasts it', async () => {
+    const transcript = await writeTranscript('Add OAuth login');
+
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'Notification',
+        session_id: 'unknown-3',
+        cwd: '/home/user/auth',
+        transcript_path: transcript,
+        notification_type: 'permission_prompt',
+        message: 'Allow Bash?',
+      }),
+      fakeRes(),
+    );
+
+    const s = getSession('unknown-3');
+    expect(s).not.toBeNull();
+    expect(s!.prompt).toBe('Add OAuth login');
+    expect(s!.status).toBe('waiting');
+    // The task broadcast carries the recovered title, not the placeholder.
+    expect(broadcast).toHaveBeenCalledWith(
+      'task',
+      expect.objectContaining({ sessionId: 'unknown-3', prompt: 'Add OAuth login' }),
+    );
   });
 });

@@ -77,8 +77,16 @@ export interface Session {
   summary: string | null;
   /** Retained narrated focus snapshots, newest-first, capped at MAX_FOCUS. `summary` is `focusHistory[0]`. */
   focusHistory: FocusEntry[];
-  /** Mermaid `graph LR` milestone storyline, populated asynchronously after activity summarization. */
+  /** Mermaid `graph LR` milestone storyline, populated asynchronously after activity summarization.
+   *  Content is session-spanning and monotonic — a later trivial tick never nulls a real storyline. */
   graph: string | null;
+  /**
+   * turnSeq for which a workflow graph should be SHOWN (folded into Current Focus). Visibility is
+   * `workflowTurnSeq === turnSeq` (see {@link isWorkflowVisible}): it goes stale automatically on a
+   * new turn, so the workflow is re-decided fresh each prompt yet stays sticky within a turn. Null
+   * until the first tick where the work warrants a graph (multi-phase) or the agent exited plan mode.
+   */
+  workflowTurnSeq: number | null;
   activityStatus: 'idle' | 'generating' | 'ready' | 'error';
   activityError: string | null;
   touchPoints: TouchPoint[];
@@ -113,6 +121,7 @@ export function newSession(sessionId: string, prompt: string, startedAt: number)
     summary: null,
     focusHistory: [],
     graph: null,
+    workflowTurnSeq: null,
     activityStatus: 'idle',
     activityError: null,
     touchPoints: [],
@@ -123,10 +132,27 @@ export function newSession(sessionId: string, prompt: string, startedAt: number)
   };
 }
 
+/**
+ * Whether the workflow graph should be shown for this session right now.
+ *
+ * Visibility is turn-scoped: the server stamps `workflowTurnSeq` with the turn for which a
+ * workflow was warranted (multi-phase work, or the agent exited plan mode). Comparing it to the
+ * live `turnSeq` makes the graph sticky WITHIN a turn (later trivial ticks don't hide it) but
+ * re-decided fresh on the NEXT prompt (the bump makes the stamp stale). Graph CONTENT
+ * (`session.graph`) is independent and session-spanning — this only governs the readout.
+ */
+export function isWorkflowVisible(s: Session): boolean {
+  return s.workflowTurnSeq != null && s.workflowTurnSeq === s.turnSeq;
+}
+
 // SSE event types the server pushes to the browser
 export type SseType =
   | 'snapshot'
   | 'task'
+  /** Focus signal: a session just received a genuine user prompt (the most-recently-interacted
+   *  session). Emitted ONLY from onUserPrompt — never on agent-driven task broadcasts — so the
+   *  client can "follow the live channel" without being yanked by autonomous agent activity. */
+  | 'active'
   | 'touch'
   | 'activity'
   | 'activity_generating'
@@ -134,4 +160,7 @@ export type SseType =
   | 'waiting'
   | 'done'
   | 'research_result'
+  /** A speculative prefetch for a suggested topic just finished warming — the result is cached
+   *  server-side (hidden until tapped). Lets the client light a "primed" dot on that chip. */
+  | 'research_primed'
   | 'heartbeat';

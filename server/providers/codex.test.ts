@@ -97,6 +97,7 @@ describe('buildActivityPrompt', () => {
     previousTopics: [] as { topic: string; reason: string }[],
     status: 'working' as 'working' | 'waiting' | 'done',
     waitingReason: null as string | null,
+    planned: false,
   };
 
   it('includes the user prompt in the output', () => {
@@ -139,6 +140,18 @@ describe('buildActivityPrompt', () => {
     expect(result).not.toContain('graph TD');
     expect(result).toMatch(/milestone/i);
     expect(result).toMatch(/append-only/i);
+  });
+
+  it('lets the model return null when the work does not warrant a graph (not planned)', () => {
+    const result = buildActivityPrompt({ ...baseCtx, prompt: 'Test', planned: false });
+    expect(result).toMatch(/EITHER null/i);
+    expect(result).toMatch(/single-step|trivial|no real phases/i);
+  });
+
+  it('forces a graph (never null) when the agent exited plan mode this turn', () => {
+    const result = buildActivityPrompt({ ...baseCtx, prompt: 'Test', planned: true });
+    expect(result).toMatch(/APPROVED PLAN/i);
+    expect(result).toMatch(/do NOT return null/i);
   });
 
   it('embeds the previous storyline so the model extends it instead of redrawing', () => {

@@ -3,14 +3,13 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
 import { cfg } from './config.js';
-import { handleSseConnection } from './sse.js';
+import { handleSseConnection, setPrimedTopicsProvider } from './sse.js';
 import { handleHook } from './hooks.js';
 import { buildProvider, setActiveProvider } from './providers/index.js';
 import { getActiveProvider } from './providers/index.js';
-import type { ResearchResult } from './providers/index.js';
 import {
-  addResearch,
   getActiveSession,
+  getSession,
   resolveResearchSession,
   isResearchInFlight,
   addResearchInFlight,
@@ -18,10 +17,16 @@ import {
   initPersistence,
   hydrateSessions,
   closeSession,
+  setSessionEndListener,
   flushAll,
 } from './state.js';
+import {
+  resolveAndStoreResearch,
+  schedulePrefetch,
+  clearPrefetch,
+  getPrimedTopics,
+} from './prefetch.js';
 import { createJsonStore } from './store.js';
-import { broadcast } from './sse.js';
 import { summarizeNow, startStaleSessionWatcher } from './activity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -71,12 +76,12 @@ app.post('/research', async (req, res) => {
   if (session) addResearchInFlight(session.sessionId, trimmed);
 
   try {
-    const result: ResearchResult = await provider.research(trimmed);
-    if (session) {
-      const withTs = { ...result, topic: trimmed, ts: Date.now() };
-      addResearch(session.sessionId, withTs);
-      broadcast('research_result', { sessionId: session.sessionId, ...withTs });
-    }
+    // With a session, resolveAndStoreResearch serves a warmed (prefetched) result instantly
+    // when available, else runs it live, then stores + broadcasts exactly as before. Without a
+    // resolvable session there's nowhere to store it — just run it live.
+    const result = session
+      ? await resolveAndStoreResearch(session, trimmed)
+      : await provider.research(trimmed);
     res.json(result);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -105,7 +110,12 @@ app.post('/activity', (req, res) => {
   }
 
   // Fire-and-forget — result is broadcast over SSE
-  summarizeNow(sessionId.trim());
+  const id = sessionId.trim();
+  summarizeNow(id);
+  // This poll is the ONLY server-side signal of which session the user is viewing. Use it to
+  // warm research for that session's current top topics in the background (no-op if disabled).
+  const s = getSession(id);
+  if (s) schedulePrefetch(s.sessionId, s.suggestedTopics);
   res.status(202).json({});
 });
 
@@ -118,6 +128,7 @@ app.post('/close', (req, res) => {
     return;
   }
   closeSession(sessionId.trim());
+  clearPrefetch(sessionId.trim()); // drop any warmed/queued research for the dismissed tab
   res.status(200).json({});
 });
 
@@ -166,6 +177,14 @@ if (cfg.isDev) {
 // Boot
 // ---------------------------------------------------------------------------
 async function boot() {
+  // Let the SSE layer replay primed-research dots on (re)connect without importing prefetch.ts
+  // (avoids an sse↔prefetch cycle — prefetch already imports broadcast from sse).
+  setPrimedTopicsProvider(getPrimedTopics);
+
+  // Free a session's prefetch cache when it ends (done/stale/turn-end), mirroring the /close
+  // path. Injected so state.ts stays free of a prefetch import (one-way: prefetch → state).
+  setSessionEndListener(clearPrefetch);
+
   // Persistence: install the JSON store and hydrate prior sessions before serving, so the
   // first SSE snapshot already carries them. createJsonStore falls back to in-memory only
   // if the data dir isn't writable — persistence failure never blocks the tool.
@@ -204,7 +223,7 @@ async function boot() {
   }
 
   const server = app.listen(cfg.port, '127.0.0.1', () => {
-    console.log(`\n🚪 Agent Foyer running at http://localhost:${cfg.port}`);
+    console.log(`\n🚪 Foyer Gate running at http://localhost:${cfg.port}`);
     if (cfg.isDev) {
       console.log(`   React app: http://localhost:5173  (run \`npm run dev\`)`);
     } else {
@@ -221,7 +240,7 @@ async function boot() {
     if (err.code === 'EADDRINUSE') {
       console.error(
         `\n✗ Port ${cfg.port} is already in use.\n` +
-          `  Another Agent Foyer (or another process) may be running on that port.\n` +
+          `  Another Foyer Gate (or another process) may be running on that port.\n` +
           `  → Stop the other process, or use a different port:\n` +
           `    FOYER_PORT=<port> npm start\n`,
       );

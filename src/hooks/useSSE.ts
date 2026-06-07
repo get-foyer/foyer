@@ -44,6 +44,7 @@ export function useSSE(handlers: HandlerMap): ConnectionStatus {
     const types: SseType[] = [
       'snapshot',
       'task',
+      'active',
       'touch',
       'activity',
       'activity_generating',
@@ -51,6 +52,7 @@ export function useSSE(handlers: HandlerMap): ConnectionStatus {
       'done',
       'waiting',
       'research_result',
+      'research_primed',
       'heartbeat',
     ];
 
