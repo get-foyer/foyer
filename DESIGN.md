@@ -1,4 +1,4 @@
-# Design System — Agent Foyer · "Instrument"
+# Design System — Foyer Gate · "Instrument"
 
 > **Read this before any visual or UI change.** Every color, font, spacing, radius,
 > and motion value below is canonical. Do not deviate without explicit approval; if
@@ -24,12 +24,12 @@
 
 **Serious instrument — designed for the glance, not the click.**
 
-Agent Foyer is the _instrument cluster for your agent_: a warm-black control panel of
+Foyer Gate is the _instrument cluster for your agent_: a warm-black control panel of
 fine monospace labels and tabular readouts, with a single signal-amber LED that lights
 up only when work is happening — legible at a glance from across the desk.
 
 This reframes the whole product. Almost every dev dashboard is built for _operating_
-(click, configure, navigate) and converges on blue-on-cold-black. Agent Foyer is the rare
+(click, configure, navigate) and converges on blue-on-cold-black. Foyer Gate is the rare
 tool you **watch while waiting**, so it's built like a control panel: status is the hero,
 the controls recede, and run-state reads from peripheral vision.
 
@@ -186,7 +186,9 @@ amber signal). Captured here so it's ready; **dark-first ships now.**
   · task-header readout strip · main column + right rail (`minmax(0,1fr) / 380px`).
 - **Panels are "modules."** Each module header is a channel strip:
   `<amber index> · <UPPERCASE MONO NAME> · <count/badge right-aligned>` —
-  `01 · CURRENT FOCUS`, `02 · WORKFLOW`, `03 · TOUCH POINTS`, `04 · RESEARCH`.
+  `01 · CURRENT FOCUS`, `02 · TOUCH POINTS`, `03 · RESEARCH`. The workflow storyline is
+  **folded into `01 · CURRENT FOCUS`** (above the narration) and shown only when the turn
+  warrants it — it is not a standalone module (ADR 0004).
 - **Module detailing:** 1px hairline border + small `border-2` **corner ticks** (top-left /
   top-right L-marks) for the technical-drawing feel.
 - **Max content width:** dashboard fills the viewport; do not center-cap.
@@ -244,17 +246,21 @@ These are what make it read as a purpose-built instrument, not a reskinned web a
 - Add module index labels to each `.panel__title`, the corner ticks, and the ON-AIR bezel
   (`.app::before` amber hairline, shown only in working state).
 - Mermaid graph theme: active node `--signal` fill+glow+pulse; done nodes dim with green tick;
-  pending nodes dim outline. (See `src/components/GraphPanel.tsx`.)
+  pending nodes dim outline. (See `src/components/WorkflowGraph.tsx`, the presentational renderer
+  folded into `SummaryPanel` per ADR 0004.)
 
 ---
 
 ## Decisions Log
 
-| Date       | Decision                                                                                  | Rationale                                                                                                                                                  |
-| ---------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-06-05 | Adopted the "Instrument" design system (bold departure from GitHub Primer)                | Current UI was a GitHub-Primer clone with no identity of its own; `/design-consultation` + research (Warp/Linear/TE/Ghostty) + a faithful rendered preview |
-| 2026-06-05 | Warm umber-black canvas (`#0E0C0A`), not cold blue-black                                  | Strongest, cheapest differentiator from the blue-on-black dev-tool sea; reads as an instrument enclosure                                                   |
-| 2026-06-05 | One signal-amber accent (`#FFB020`), cyan for links                                       | Color = signal, not paint; amber as a lit LED is the ownable signature; cyan keeps amber pure                                                              |
-| 2026-06-05 | IBM Plex Mono + IBM Plex Sans (chose over Geist single-mono, Martian two-mono, JetBrains) | One industrial superfamily → guaranteed harmony + genuine control-room heritage; picked from a rendered 4-system specimen                                  |
-| 2026-06-05 | Crisp 2/4px radius (from soft 6px) + ON-AIR lit bezel signature                           | Reinforces "precise instrument"; bezel serves the glance-from-across-the-desk core job                                                                     |
-| 2026-06-05 | Dark-first; light theme captured as draft fast-follow                                     | Tool lives beside a terminal — dark is home; best effort-to-quality ratio, tokens structured for a clean light add                                         |
+| Date       | Decision                                                                                                    | Rationale                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-06-05 | Adopted the "Instrument" design system (bold departure from GitHub Primer)                                  | Current UI was a GitHub-Primer clone with no identity of its own; `/design-consultation` + research (Warp/Linear/TE/Ghostty) + a faithful rendered preview                                                                                                                                                                                                                                                                                                                                                                                  |
+| 2026-06-05 | Warm umber-black canvas (`#0E0C0A`), not cold blue-black                                                    | Strongest, cheapest differentiator from the blue-on-black dev-tool sea; reads as an instrument enclosure                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 2026-06-05 | One signal-amber accent (`#FFB020`), cyan for links                                                         | Color = signal, not paint; amber as a lit LED is the ownable signature; cyan keeps amber pure                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 2026-06-05 | IBM Plex Mono + IBM Plex Sans (chose over Geist single-mono, Martian two-mono, JetBrains)                   | One industrial superfamily → guaranteed harmony + genuine control-room heritage; picked from a rendered 4-system specimen                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 2026-06-05 | Crisp 2/4px radius (from soft 6px) + ON-AIR lit bezel signature                                             | Reinforces "precise instrument"; bezel serves the glance-from-across-the-desk core job                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 2026-06-05 | Dark-first; light theme captured as draft fast-follow                                                       | Tool lives beside a terminal — dark is home; best effort-to-quality ratio, tokens structured for a clean light add                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 2026-06-06 | "Jump to live" pill (supersedes the FOLLOW / HELD control)                                                  | "Follow the live channel": following is the silent default; a contextual amber pill ("↓ <session> is live — Jump") appears at the top of the sidebar only when a tab is held and a different session goes live (chat "jump to present" pattern). Replaced the persistent FOLLOW/HELD control, which tested as confusing (one widget = status light + toggle + jump button; disabled-vs-enabled affordance; "HELD" jargon). Reuses `--working` amber pending the Instrument `--signal` swap; entrance gated behind `prefers-reduced-motion`. |
+| 2026-06-06 | Amber "primed" dot on a research chip with a warmed (prefetched) result                                     | Signal-amber = "ready/live": a 6px dot tells the user at a glance which taps are instant (background prefetch, ADR 0003). A readout, not decoration. The chip's blue `--accent` hover stays the "interactive" cue so amber stays pure signal; reuses `--amber` pending the Instrument `--signal` swap.                                                                                                                                                                                                                                      |
+| 2026-06-06 | Workflow graph folded into `01 · CURRENT FOCUS`, shown only when warranted (was standalone `02 · WORKFLOW`) | Every element must be a readout or a signal, never decoration. The graph always rendered — even a thin "Working…" node for a one-step task — surfacing empty chrome. Now the model returns a nullable graph and the storyline is shown only for multi-phase or plan-mode turns, inside the focus readout it describes; module list drops to three. Sticky-per-turn so it doesn't flicker. (ADR 0004)                                                                                                                                        |

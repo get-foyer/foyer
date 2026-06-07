@@ -17,6 +17,8 @@ vi.mock('./state.js', () => ({
   setActivityGenerating: vi.fn(),
   setActivity: vi.fn(),
   setActivityError: vi.fn(),
+  // run() reads this to set ctx.planned (the hybrid workflow floor). Default: not planned.
+  isPlannedTurn: vi.fn(() => false),
 }));
 
 vi.mock('./sse.js', () => ({

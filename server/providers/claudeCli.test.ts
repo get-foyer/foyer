@@ -1,7 +1,37 @@
-import { describe, it, expect } from 'vitest';
-import { parseResearchText, parseActivityJson, buildClaudeArgs } from './claudeCli.js';
-import { FALLBACK_GRAPH } from './codex.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  parseResearchText,
+  parseActivityJson,
+  buildClaudeArgs,
+  ClaudeCliProvider,
+} from './claudeCli.js';
 import { FOYER_INTERNAL_SENTINEL } from './internal.js';
+
+// Capture the argv handed to the (promisified) execFile and control its stdout,
+// so we can assert what `claude -p` is actually invoked with — without spawning.
+// vi.hoisted lets the hoisted vi.mock factory below reference this safely.
+const h = vi.hoisted(() => ({
+  calls: [] as { cmd: string; args: string[] }[],
+  stdout: '',
+}));
+
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return {
+    ...actual,
+    // promisify(execFile) invokes execFile(cmd, args, opts, cb) and resolves to
+    // the callback's first result arg — i.e. { stdout, stderr }.
+    execFile: (
+      cmd: string,
+      args: string[],
+      _opts: unknown,
+      cb: (err: Error | null, res: { stdout: string; stderr: string }) => void,
+    ) => {
+      h.calls.push({ cmd, args });
+      cb(null, { stdout: h.stdout, stderr: '' });
+    },
+  };
+});
 
 // ---------------------------------------------------------------------------
 // parseResearchText
@@ -69,16 +99,22 @@ describe('parseActivityJson', () => {
     expect(result.summary).toBe('Working on tests.');
   });
 
-  it('falls back gracefully when JSON is invalid', () => {
+  it('falls back gracefully when JSON is invalid (graph → null = no workflow)', () => {
     const result = parseActivityJson('not valid JSON at all');
     expect(result.summary).toBe('not valid JSON at all');
-    expect(result.graph).toBe(FALLBACK_GRAPH);
+    expect(result.graph).toBeNull();
   });
 
-  it('provides fallback values when fields are missing', () => {
+  it('returns a null graph (no workflow) when the graph field is missing', () => {
     const result = parseActivityJson(JSON.stringify({}));
     expect(result.summary).toBe('Agent is working…');
-    expect(result.graph).toBe(FALLBACK_GRAPH);
+    expect(result.graph).toBeNull();
+  });
+
+  it('returns a null graph when the model explicitly sends graph: null (trivial work)', () => {
+    const result = parseActivityJson(JSON.stringify({ summary: 'Quick fix.', graph: null }));
+    expect(result.summary).toBe('Quick fix.');
+    expect(result.graph).toBeNull();
   });
 
   it('strips mermaid fences from the graph field', () => {
@@ -151,5 +187,52 @@ describe('buildClaudeArgs', () => {
     expect(args).toContain('WebSearch');
     // Extra args come after the fixed flags
     expect(args.indexOf('--allowedTools')).toBeGreaterThan(args.indexOf('--setting-sources'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ClaudeCliProvider.research() — argv regression
+// run() always JSON.parse(stdout)s and buildClaudeArgs() hardcodes
+// `--output-format json`. research() must NOT pass its own `--output-format`:
+// a second one (text) makes the CLI emit plain text, JSON.parse throws, and
+// /research 500s. This guards against re-introducing that conflicting flag.
+// ---------------------------------------------------------------------------
+
+describe('ClaudeCliProvider.research', () => {
+  beforeEach(() => {
+    h.calls.length = 0;
+    h.stdout = '';
+  });
+
+  it('invokes claude with exactly one --output-format (json)', async () => {
+    h.stdout = JSON.stringify({ result: 'Briefing.' });
+    await new ClaudeCliProvider().research('React Server Components');
+
+    expect(h.calls).toHaveLength(1);
+    const { args } = h.calls[0];
+    const formatFlags = args.filter((a) => a === '--output-format');
+    expect(formatFlags).toHaveLength(1); // the bug: two flags (json then text)
+    expect(args[args.indexOf('--output-format') + 1]).toBe('json');
+  });
+
+  it('still requests the web tools research needs', async () => {
+    h.stdout = JSON.stringify({ result: 'Briefing.' });
+    await new ClaudeCliProvider().research('topic');
+
+    const { args } = h.calls[0];
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('WebSearch,WebFetch');
+  });
+
+  it('parses the JSON envelope into summary + links (does not throw)', async () => {
+    h.stdout = JSON.stringify({
+      result: 'Summary of findings.\n\n1. React — https://react.dev\n2. Vite — https://vitejs.dev',
+    });
+    const result = await new ClaudeCliProvider().research('topic');
+
+    expect(result.summary).toContain('Summary of findings.');
+    expect(result.links).toEqual([
+      { title: 'React', url: 'https://react.dev' },
+      { title: 'Vite', url: 'https://vitejs.dev' },
+    ]);
   });
 });

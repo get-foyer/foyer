@@ -1,8 +1,8 @@
-# Agent Foyer 🚪
+# Foyer Gate 🚪
 
 > Turn the 3–5 minute "agent is working" wait into focused, in-context time.
 
-When you prompt a Claude Code agent, Agent Foyer hooks into the session and renders a live dashboard: the approved plan, a mermaid graph of it, the files being touched in real time, and a deep-research panel for learning while you wait.
+When you prompt a Claude Code agent, Foyer Gate hooks into the session and renders a live dashboard: a narrated "current focus" (with a workflow graph folded in when the work is multi-phase), the files being touched in real time, and a deep-research panel for learning while you wait.
 
 **Core UX principle:** every panel gives you something to think about _in the same mental space as the current task_ — not just a progress bar.
 
@@ -14,7 +14,7 @@ When you prompt a Claude Code agent, Agent Foyer hooks into the session and rend
 
 - **Live touch points** — every file Write/Edit/MultiEdit streams as it happens
 - **Plan capture** — the approved plan auto-populates when you exit plan mode (rendered as formatted markdown)
-- **LLM-generated graph** — a mermaid flowchart of the plan, generated automatically
+- **Workflow graph** — a mermaid storyline of the session, generated automatically and folded into Current Focus — shown only when the work is genuinely multi-phase (or you went through plan mode), so trivial tasks stay clutter-free
 - **Deep research** — enter any topic during the wait and get a sourced briefing
 - **Connection status** — a Live / Reconnecting / Disconnected badge so you always know if the dashboard is connected
 - **Active provider chip** — shows which LLM backend is in use; banner when none is configured
@@ -36,8 +36,8 @@ When you prompt a Claude Code agent, Agent Foyer hooks into the session and rend
 ## Quick start
 
 ```bash
-git clone https://github.com/dennischiua/agent-foyer
-cd agent-foyer
+git clone https://github.com/get-foyer/foyer-gate
+cd foyer-gate
 pnpm install
 pnpm setup      # interactive wizard: pick backend, install hooks
 pnpm build
@@ -60,7 +60,7 @@ The setup wizard auto-detects what's available and asks which to use.
 
 **†** From 2026-06-15, Claude subscription headless usage (via `claude -p`) draws from a separate monthly "Agent SDK credit" pool, distinct from your interactive limits. The setup wizard warns you before choosing this option.
 
-**⚠ ToS note:** Using the Codex or Claude CLI to automate calls from a local server is in a gray area of each provider's terms of service. Agent Foyer is intended for personal, local developer use only. For production or team use, use the Anthropic API (BYOK).
+**⚠ ToS note:** Using the Codex or Claude CLI to automate calls from a local server is in a gray area of each provider's terms of service. Foyer Gate is intended for personal, local developer use only. For production or team use, use the Anthropic API (BYOK).
 
 ---
 
@@ -105,7 +105,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for architecture details and conventions.
 ## Uninstall
 
 ```bash
-pnpm uninstall  # strips only Agent Foyer hooks; all other hooks are preserved
+pnpm uninstall  # strips only Foyer Gate hooks; all other hooks are preserved
 ```
 
 ---

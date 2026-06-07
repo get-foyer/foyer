@@ -35,6 +35,12 @@ export interface ActivityContext {
   status: SessionStatus;
   /** Why the session is blocked on the user, if waiting (e.g. a permission prompt). */
   waitingReason: string | null;
+  /**
+   * True when the agent exited plan mode this turn (ExitPlanMode fired). The hybrid
+   * workflow-visibility trigger forces a graph when planned, so the prompt is told to
+   * always draw a multi-phase storyline rather than returning null for this turn.
+   */
+  planned: boolean;
 }
 
 /**
@@ -81,16 +87,17 @@ export interface LlmProvider {
    * the agent is doing right now, given the session context.
    * Returns { summary, graph } where:
    *   summary = 2-4 sentences of markdown (present tense, no preamble)
-   *   graph   = Mermaid `graph LR` storyline: a :::goal subject node + 3-6
-   *             intent-named phases, :::active on the current one (see
-   *             buildActivityPrompt in codex.ts for the full contract)
+   *   graph   = Mermaid `graph LR` storyline (a :::goal subject node + 3-6
+   *             intent-named phases, :::active on the current one), OR null when
+   *             the work does not warrant a workflow graph (trivial/single-step).
+   *             Normalized via normalizeGraph() (server/providers/text.ts).
    *   topics  = 3-6 research topics derived from the agent's work, each with a
    *             one-line `reason` (provenance). May be []. Normalized via
    *             normalizeTopics() (server/providers/text.ts) at each parse site.
    */
   summarizeActivity(
     ctx: ActivityContext,
-  ): Promise<{ summary: string; graph: string; topics: SuggestedTopic[] }>;
+  ): Promise<{ summary: string; graph: string | null; topics: SuggestedTopic[] }>;
 }
 
 // Lazy singleton — set after the server reads config

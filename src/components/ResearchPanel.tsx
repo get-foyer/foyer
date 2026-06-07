@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import type { ResearchResult, SuggestedTopic, Session } from '../types';
-import { Markdown } from './Markdown';
 
 interface Props {
   results: ResearchResult[];
@@ -11,9 +10,29 @@ interface Props {
   /** The sessionId of the session currently being viewed. Sent with the research request so
    *  results land on the viewed session, not whichever session started last. */
   sessionId: string | null;
+  /** Topic keys (trim+lowercase) whose research is PRIMED — prefetched and ready server-side, so
+   *  a tap returns instantly. Drives the amber "ready" dot on the chip. */
+  primedTopics: string[];
+  /** Open the full-width Research tab on the briefing with this timestamp. */
+  onOpenResearch: (ts: number) => void;
 }
 
-export function ResearchPanel({ results, suggestedTopics, activityStatus, sessionId }: Props) {
+/**
+ * Deep Research LAUNCHER (lives in the right rail of the Focus view).
+ *  - Topic chips: tap to run research (unchanged pipeline).
+ *  - Ready-list: a compact index of completed briefings; tapping one opens the full-width
+ *    `04 · RESEARCH` reading tab on that briefing. The full reading surface lives in
+ *    `ResearchTab`, not here — the rail stays a launcher + "what's ready" glance.
+ */
+export function ResearchPanel({
+  results,
+  suggestedTopics,
+  primedTopics,
+  activityStatus,
+  sessionId,
+  onOpenResearch,
+}: Props) {
+  const primed = new Set(primedTopics);
   // Topics with a research call in flight from THIS panel — keyed by topic string so a
   // chip stays disabled (and a double-click is a no-op) until its result lands via SSE.
   const [pending, setPending] = useState<Set<string>>(new Set());
@@ -59,6 +78,8 @@ export function ResearchPanel({ results, suggestedTopics, activityStatus, sessio
         <ul className="research-topics" aria-label="Suggested research topics">
           {suggestedTopics.map((t) => {
             const isPending = pending.has(t.topic);
+            // Primed = research already warmed in the background → this tap is instant.
+            const isPrimed = !isPending && primed.has(t.topic.trim().toLowerCase());
             return (
               <li key={t.topic}>
                 <button
@@ -66,10 +87,18 @@ export function ResearchPanel({ results, suggestedTopics, activityStatus, sessio
                   className="research-chip"
                   onClick={() => handleResearch(t.topic)}
                   disabled={isPending}
-                  title={t.reason}
+                  title={isPrimed ? `${t.reason} · ready` : t.reason}
+                  aria-label={isPrimed ? `${t.topic} — ready` : undefined}
                 >
                   <span className="research-chip__topic">{t.topic}</span>
                   {t.reason && <span className="research-chip__reason">{t.reason}</span>}
+                  {isPrimed && (
+                    <span
+                      className="research-chip__primed"
+                      aria-hidden="true"
+                      title="Ready — tap is instant"
+                    />
+                  )}
                   {isPending && <span className="spinner spinner--sm research-chip__spinner" />}
                 </button>
               </li>
@@ -86,11 +115,29 @@ export function ResearchPanel({ results, suggestedTopics, activityStatus, sessio
         </p>
       )}
 
-      <div className="research-results" aria-live="polite" aria-label="Research results">
-        {results.map((r) => (
-          <ResearchCard key={r.ts} result={r} />
-        ))}
-      </div>
+      {results.length > 0 && (
+        <div className="research-ready-list">
+          <p className="research-ready-list__label">Ready to read</p>
+          <ul aria-label="Completed research briefings">
+            {results.map((r) => (
+              <li key={r.ts}>
+                <button
+                  type="button"
+                  className="research-ready-row"
+                  onClick={() => onOpenResearch(r.ts)}
+                  title={`Open briefing: ${r.topic}`}
+                >
+                  <span className="research-ready-row__dot" aria-hidden="true" />
+                  <span className="research-ready-row__topic">{r.topic}</span>
+                  <time className="research-ready-row__ts">
+                    {new Date(r.ts).toLocaleTimeString()}
+                  </time>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </section>
   );
 }
@@ -120,48 +167,5 @@ function ResearchEmptyState({ activityStatus }: { activityStatus: Session['activ
       <span className="panel__empty-glyph">◱</span>
       <p>{message}</p>
     </div>
-  );
-}
-
-function ResearchCard({ result }: { result: ResearchResult }) {
-  const [expanded, setExpanded] = useState(true);
-
-  return (
-    <article className="research-card">
-      <button
-        className="research-card__header"
-        onClick={() => setExpanded((v) => !v)}
-        type="button"
-        aria-expanded={expanded}
-      >
-        <span className="research-card__topic">{result.topic}</span>
-        <span className="research-card__toggle" aria-hidden="true">
-          {expanded ? '▾' : '▸'}
-        </span>
-      </button>
-
-      {expanded && (
-        <div className="research-card__body">
-          <Markdown text={result.summary} className="research-card__summary" />
-          {result.links.length > 0 && (
-            <ul className="research-card__links">
-              {result.links.map((link, i) => (
-                <li key={i}>
-                  <a
-                    href={link.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="research-card__link"
-                  >
-                    {link.title || link.url}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-          <time className="research-card__ts">{new Date(result.ts).toLocaleTimeString()}</time>
-        </div>
-      )}
-    </article>
   );
 }

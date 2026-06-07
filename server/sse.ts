@@ -5,6 +5,17 @@ import { getAllSessions, getActiveSessionId } from './state.js';
 // Active SSE client connections
 const clients = new Set<Response>();
 
+/**
+ * Injected getter for a session's currently-primed (warmed) research topics. Set at boot via
+ * `setPrimedTopicsProvider(getPrimedTopics)` so this module never imports `prefetch.ts` — that
+ * would create an `sse → prefetch → sse` cycle (prefetch imports `broadcast` from here).
+ */
+let primedTopicsProvider: ((sessionId: string) => string[]) | null = null;
+
+export function setPrimedTopicsProvider(fn: (sessionId: string) => string[]): void {
+  primedTopicsProvider = fn;
+}
+
 /** Register a new SSE client. Sends an initial snapshot and sets up cleanup. */
 export function handleSseConnection(req: Request, res: Response): void {
   // SSE headers
@@ -16,7 +27,19 @@ export function handleSseConnection(req: Request, res: Response): void {
 
   // Send immediate snapshot so the browser isn't blank on connect/reconnect.
   // Carries all sessions (working + done) so tabs survive EventSource reconnects.
-  sendTo(res, 'snapshot', { sessions: getAllSessions(), activeSessionId: getActiveSessionId() });
+  const sessions = getAllSessions();
+  sendTo(res, 'snapshot', { sessions, activeSessionId: getActiveSessionId() });
+
+  // Replay primed-topic state AFTER the snapshot so reconnecting clients re-light the right
+  // dots. The client resets its primed set on every snapshot, so this replay is the single
+  // source of truth — a dot can never survive a server restart / TTL expiry it doesn't reflect.
+  if (primedTopicsProvider) {
+    for (const s of sessions) {
+      for (const topic of primedTopicsProvider(s.sessionId)) {
+        sendTo(res, 'research_primed', { sessionId: s.sessionId, topic });
+      }
+    }
+  }
 
   clients.add(res);
 

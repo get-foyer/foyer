@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import DOMPurify from 'dompurify';
 
-// Documents WHY GraphPanel must use `flowchart: { htmlLabels: false }`.
+// Documents WHY WorkflowGraph must use `flowchart: { htmlLabels: false }`.
 //
-// GraphPanel sanitizes mermaid's SVG with `USE_PROFILES: { svg: true, svgFilters: true }`
+// WorkflowGraph sanitizes mermaid's SVG with `USE_PROFILES: { svg: true, svgFilters: true }`
 // before injecting it (XSS control). That SVG-only profile strips the XHTML that lives
 // inside <foreignObject> — which is exactly where mermaid puts node labels when
 // htmlLabels is true. Result: labels vanish but the node rects keep their computed

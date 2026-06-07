@@ -16,7 +16,7 @@
  */
 import { watch } from 'fs';
 import type { FSWatcher } from 'fs';
-import { getSession, finishSession } from './state.js';
+import { getSession, finishSession, isPlannedTurn } from './state.js';
 import { setActivityGenerating, setActivity, setActivityError } from './state.js';
 import { broadcast } from './sse.js';
 import {
@@ -61,6 +61,15 @@ function getMeta(sessionId: string): SessionMeta {
     meta.set(sessionId, m);
   }
   return m;
+}
+
+/**
+ * Whether a summarisation LLM call is currently in flight for a session. Read-only; the
+ * prefetch worker uses this to YIELD — it won't start a speculative research while the live
+ * activity summary (the latency-critical primary signal) is holding the provider.
+ */
+export function isSummarizing(sessionId: string): boolean {
+  return meta.get(sessionId)?.inFlight ?? false;
 }
 
 /** Record the transcript path from hook payloads and start watching for turn completion. */
@@ -334,6 +343,9 @@ async function run(sessionId: string): Promise<void> {
       previousTopics: session.suggestedTopics,
       status: session.status,
       waitingReason: session.waitingReason,
+      // Hybrid workflow-visibility floor: if the agent exited plan mode on THIS turn, the
+      // prompt is told to always draw a graph (a planned task is inherently multi-phase).
+      planned: isPlannedTurn(sessionId, turnSeq),
     };
 
     // `topics` defaults to [] defensively — a provider that returns nothing must not crash.
@@ -353,12 +365,23 @@ async function run(sessionId: string): Promise<void> {
     });
     const stored = getSession(sessionId);
     const suggestedTopics = stored?.suggestedTopics ?? [];
-    broadcast('activity', { sessionId, summary, graph, topics: suggestedTopics, entry });
+    // Broadcast the STORED graph + visibility marker, not the raw model output: setActivity
+    // may keep the previous storyline when the model returned null (content is monotonic), and
+    // workflowTurnSeq drives whether the client folds the graph into Current Focus.
+    const storedGraph = stored?.graph ?? null;
+    broadcast('activity', {
+      sessionId,
+      summary,
+      graph: storedGraph,
+      workflowTurnSeq: stored?.workflowTurnSeq ?? null,
+      topics: suggestedTopics,
+      entry,
+    });
     if (currentSize !== null) {
       m.lastSummarizedSize = currentSize;
     }
     console.log(
-      `[activity] Summarised ${sessionId} (${summary.length} chars, ${graph.length} chars graph, ${suggestedTopics.length} topics)`,
+      `[activity] Summarised ${sessionId} (${summary.length} chars, ${storedGraph?.length ?? 0} chars graph, ${suggestedTopics.length} topics)`,
     );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -98,7 +98,10 @@ export function flushAll(): void {
 // ---------------------------------------------------------------------------
 const inFlightResearch = new Map<string, Set<string>>();
 
-const topicKey = (topic: string): string => topic.trim().toLowerCase();
+/** Canonical research-topic key: trimmed + lowercased. The single source of truth for topic
+ *  identity across the in-flight guard, the suggested-topic filter, and the prefetch cache —
+ *  exported so those callers can never desync on normalization. */
+export const topicKey = (topic: string): string => topic.trim().toLowerCase();
 
 export function addResearchInFlight(sessionId: string, topic: string): void {
   let set = inFlightResearch.get(sessionId);
@@ -115,6 +118,33 @@ export function removeResearchInFlight(sessionId: string, topic: string): void {
 
 export function isResearchInFlight(sessionId: string, topic: string): boolean {
   return inFlightResearch.get(sessionId)?.has(topicKey(topic)) ?? false;
+}
+
+// ---------------------------------------------------------------------------
+// Plan-mode marker (ephemeral, server-only)
+//
+// Records the turnSeq at which the agent exited plan mode (the ExitPlanMode hook).
+// Like inFlightResearch above, it is deliberately NOT on the Session object: the
+// signal only matters for the LIVE turn (it forces the workflow graph on via the
+// hybrid trigger in setActivity), and a server restart demotes the session to
+// `interrupted` (terminal), so there is nothing to restore. Cleared on finish/close
+// so it stays bounded by active sessions.
+//
+//   ExitPlanMode hook ──► markPlanned(id) ──► plannedTurn[id] = turnSeq
+//                                                  │
+//   setActivity / run() ──► isPlannedTurn(id, turnSeq) ◄┘  (hybrid workflow floor)
+// ---------------------------------------------------------------------------
+const plannedTurn = new Map<string, number>();
+
+/** Record that the agent exited plan mode on the session's CURRENT turn. */
+export function markPlanned(sessionId: string): void {
+  const s = sessions.get(sessionId);
+  if (s) plannedTurn.set(sessionId, s.turnSeq);
+}
+
+/** Whether ExitPlanMode fired for `turnSeq` on this session — the hybrid workflow-visibility floor. */
+export function isPlannedTurn(sessionId: string, turnSeq: number): boolean {
+  return plannedTurn.get(sessionId) === turnSeq;
 }
 
 export function getActiveSessionId(): string | null {
@@ -148,6 +178,7 @@ export function resolveResearchSession(sessionId: string | null | undefined): Se
 export function _resetStateForTest(): void {
   sessions.clear();
   inFlightResearch.clear();
+  plannedTurn.clear();
   activeSessionId = null;
   dirty.clear();
   if (flushTimer) {
@@ -195,6 +226,14 @@ export function startSession(
     }
     existing.prompt = existing.prompts.at(-1) ?? prompt; // latest = current focus
     activeSessionId = sessionId;
+    // Re-open a dismissed session: a fresh prompt un-closes the tab so server + client agree
+    // (otherwise the client re-adds it via `task` while snapshots keep hiding it — split-brain).
+    // Flip + flushNow ONLY on the closed→open transition; the common continue path stays on the
+    // debounced markDirty below (no write amplification on the hot path).
+    if (existing.closed) {
+      existing.closed = false;
+      flushNow(sessionId); // lifecycle transition — persist immediately
+    }
     markDirty(sessionId);
     return { session: existing, continued: true };
   }
@@ -244,7 +283,8 @@ export function setActivity(
   sessionId: string,
   update: {
     summary: string;
-    graph: string;
+    /** null = the model judged this work doesn't warrant a workflow graph (trivial/single-step). */
+    graph: string | null;
     topics: SuggestedTopic[];
     turnSeq: number;
     turnPrompt: string;
@@ -273,7 +313,18 @@ export function setActivity(
   }
 
   s.summary = update.summary;
-  s.graph = update.graph;
+
+  // --- Workflow visibility + content (folded into Current Focus) ---
+  // VISIBILITY (turn-scoped, sticky): show a workflow when the agent went through plan mode this
+  // turn OR the model judged the work multi-phase (non-null graph). Stamping workflowTurnSeq with
+  // THIS turn makes it sticky within the turn (a later trivial/null tick can't hide it) yet stale
+  // on the next prompt (turnSeq bumps), so visibility is re-decided fresh — see isWorkflowVisible.
+  const wantsWorkflow = isPlannedTurn(sessionId, update.turnSeq) || update.graph != null;
+  if (wantsWorkflow) s.workflowTurnSeq = update.turnSeq;
+  // CONTENT (session-spanning, monotonic): never overwrite a real storyline with null. A trivial
+  // tick after a rich one keeps the drawn graph; hiding is the visibility layer's job, not erasure.
+  if (update.graph != null) s.graph = update.graph;
+
   s.suggestedTopics = filterSuggestedTopics(s, update.topics);
   s.activityStatus = 'ready';
   s.activityError = null;
@@ -331,6 +382,7 @@ export function finishSession(sessionId: string): boolean {
   s.status = 'done';
   s.waitingReason = null;
   s.finishedAt = Date.now();
+  plannedTurn.delete(sessionId); // ephemeral marker — drop on terminal transition
   flushNow(sessionId); // lifecycle transition — persist immediately
   return true;
 }
@@ -341,6 +393,7 @@ export function closeSession(sessionId: string): boolean {
   const s = sessions.get(sessionId);
   if (!s) return false;
   s.closed = true;
+  plannedTurn.delete(sessionId); // ephemeral marker — drop when the tab is dismissed
   flushNow(sessionId);
   return true;
 }

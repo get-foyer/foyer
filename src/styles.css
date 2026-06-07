@@ -1,4 +1,4 @@
-/* Agent Foyer — dashboard styles */
+/* Foyer Gate — dashboard styles */
 
 /* -------------------------------------------------------------------------
    Reset + base
@@ -88,11 +88,22 @@ body {
 }
 
 .app__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* Focus view: the original two-column grid (left column + 360px right rail), unchanged.
+   The view-tabs strip sits above this inside .app__main when research exists. */
+.app__focus-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
   flex: 1;
   overflow: hidden;
   gap: 0;
+  min-height: 0;
 }
 
 .app__left {
@@ -140,6 +151,88 @@ body {
   color: var(--text-dim);
   padding: 12px 8px;
   text-align: center;
+}
+
+/* "Jump to live" pill — the single re-engage affordance, shown only when you've pinned a tab
+   and a different session goes live (chat "jump to present" pattern). Following is the silent
+   default, so there's no persistent control. Uses --working (amber), which forward-maps to the
+   Instrument --signal token when that palette swap lands (DESIGN.md). */
+.jump-to-live-region {
+  /* Persistent aria-live container so the pill is announced when it appears. A plain block
+     (not display:contents, which some browsers drop from the a11y tree) — zero height when
+     empty, so it adds no visible chrome while following. */
+  display: block;
+}
+
+.jump-to-live {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 44px; /* touch target */
+  margin-bottom: 6px;
+  padding: 8px 10px;
+  text-align: left;
+  background: color-mix(in srgb, var(--working) 12%, var(--surface-2));
+  border: 1px solid color-mix(in srgb, var(--working) 35%, var(--border));
+  border-radius: var(--radius);
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+  animation: jump-in 150ms ease-out;
+}
+
+.jump-to-live:hover {
+  background: color-mix(in srgb, var(--working) 18%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--working) 50%, var(--border));
+}
+
+.jump-to-live:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.jump-to-live__arrow {
+  flex-shrink: 0;
+  color: var(--working);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.jump-to-live__label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0; /* allow the name to ellipsize */
+  line-height: 1.3;
+}
+
+.jump-to-live__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.jump-to-live__hint {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--working);
+}
+
+@keyframes jump-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Each tab row holds the select button + the × close button side by side */
@@ -761,25 +854,40 @@ body {
 }
 
 /* -------------------------------------------------------------------------
-   Graph panel
+   Workflow storyline — folded into Current Focus (shown only when warranted)
    ------------------------------------------------------------------------- */
-.graph-panel__generating {
+.summary-panel__workflow {
+  position: relative; /* anchors the right-edge scroll fade */
+  flex: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.summary-panel__workflow-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 8px 14px 0;
+}
+
+.summary-panel__workflow-sketching {
   display: flex;
   align-items: center;
   gap: 10px;
   color: var(--text-dim);
   font-size: 14px;
-  padding: 20px 14px;
+  padding: 12px 14px 16px;
 }
 
-.graph-panel__svg {
-  padding: 16px;
+.workflow-graph__svg {
+  padding: 12px 14px 16px;
   overflow: auto;
-  flex: 1;
-  max-height: 460px;
+  max-height: 260px;
 }
 
-.graph-panel__svg svg {
+.workflow-graph__svg svg {
   display: block;
   margin: auto;
 }
@@ -789,11 +897,11 @@ body {
    is on. Gives plain phase nodes the app's surface + border + corner radius so
    the storyline reads as one intentional component instead of mermaid's default
    mismatched boxes. The :not() guard keeps the active-step highlight intact. */
-.graph-panel__svg svg .node:not(.goal):not(.active) > rect,
-.graph-panel__svg svg .node:not(.goal):not(.active) > polygon,
-.graph-panel__svg svg .node:not(.goal):not(.active) > circle,
-.graph-panel__svg svg .node:not(.goal):not(.active) > ellipse,
-.graph-panel__svg svg .node:not(.goal):not(.active) > path {
+.workflow-graph__svg svg .node:not(.goal):not(.active) > rect,
+.workflow-graph__svg svg .node:not(.goal):not(.active) > polygon,
+.workflow-graph__svg svg .node:not(.goal):not(.active) > circle,
+.workflow-graph__svg svg .node:not(.goal):not(.active) > ellipse,
+.workflow-graph__svg svg .node:not(.goal):not(.active) > path {
   fill: var(--surface-2) !important;
   stroke: var(--border-light) !important;
   rx: var(--radius);
@@ -801,28 +909,23 @@ body {
 }
 
 /* Right-edge fade: signals the horizontal storyline scrolls instead of looking
-   abruptly clipped. Graph width / responsive sizing is intentionally left as-is. */
-.graph-panel {
-  position: relative;
-}
-
-.graph-panel::after {
+   abruptly clipped. Anchored to the workflow block (not the whole panel) so it
+   covers only the graph strip and stops above the bottom hairline. */
+.summary-panel__workflow::after {
   content: '';
   position: absolute;
   top: 0;
   right: 0;
-  bottom: 0;
+  bottom: 1px;
   width: 28px;
   background: linear-gradient(to right, transparent, var(--surface));
-  border-top-right-radius: var(--radius);
-  border-bottom-right-radius: var(--radius);
   pointer-events: none;
 }
 
-.graph-panel__error {
-  padding: 14px;
+.workflow-graph__error {
+  padding: 12px 14px 16px;
 }
-.graph-panel__raw {
+.workflow-graph__raw {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-dim);
@@ -1013,92 +1116,338 @@ body {
   right: 8px;
 }
 
+/* Primed: research is warmed (prefetched) and ready — this tap is instant. Amber = "ready/live"
+ * signal; the chip's blue --accent hover stays the "interactive" cue. Sits where the spinner
+ * would (the two are mutually exclusive: a chip is either warming-on-tap or pre-warmed). */
+.research-chip__primed {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--amber) 60%, transparent);
+}
+
 .research-panel__error {
   color: var(--red);
   font-size: 12px;
   padding: 8px 14px;
 }
 
-.research-results {
-  overflow-y: auto;
+/* Ready-list — compact index of completed briefings in the rail launcher. Tapping a row
+   opens the full-width Research tab on that briefing; full reading lives there, not here. */
+.research-ready-list {
   flex: 1;
-  padding: 6px 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 14px;
 }
 
-.research-card {
-  border-bottom: 1px solid var(--border);
+.research-ready-list__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 6px;
 }
 
-.research-card__header {
+.research-ready-list ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.research-ready-row {
   width: 100%;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
+  gap: 8px;
+  padding: 8px;
+  min-height: 36px;
   background: none;
   border: none;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--text);
   text-align: left;
   transition: background 0.1s;
 }
 
-.research-card__header:hover {
+.research-ready-row:hover {
   background: var(--surface-2);
 }
 
-.research-card__topic {
-  font-size: 14px;
-  font-weight: 500;
+.research-ready-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Amber "ready" pip. --working forward-maps to the Instrument --signal accent (DESIGN.md). */
+.research-ready-row__dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--working);
+}
+
+.research-ready-row__topic {
   flex: 1;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.research-card__toggle {
+.research-ready-row__ts {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+/* -------------------------------------------------------------------------
+   View tabs (Focus ⇄ Research) — channel strip over the main area
+   ------------------------------------------------------------------------- */
+.view-tabs {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0 8px;
+}
+
+.view-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px; /* overlap the strip's bottom hairline */
+  cursor: pointer;
   color: var(--text-dim);
-  font-size: 14px;
-  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition:
+    color 0.12s,
+    border-color 0.12s;
 }
 
-.research-card__body {
-  padding: 0 14px 14px;
-}
-
-.research-card__summary {
-  font-size: 14px;
-  line-height: 1.7;
+.view-tab:hover {
   color: var(--text);
-  white-space: pre-wrap;
-  margin-bottom: 10px;
 }
 
-.research-card__links {
+.view-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.view-tab--active {
+  color: var(--text);
+  border-bottom-color: var(--working);
+}
+
+.view-tab__ready-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--working);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* -------------------------------------------------------------------------
+   Research tab — full-width reading surface (04 · RESEARCH)
+   ------------------------------------------------------------------------- */
+.research-tab {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.research-tab--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.research-tab__index {
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 14px 10px;
+  background: var(--surface);
+}
+
+.research-tab__index-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 0 6px 8px;
+}
+
+.research-tab__index-list {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+}
+
+.research-tab__index-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  min-height: 36px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  box-shadow: inset 2px 0 0 transparent;
+  transition: background 0.1s;
+}
+
+.research-tab__index-item:hover {
+  background: var(--surface-2);
+}
+
+.research-tab__index-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.research-tab__index-item--selected {
+  background: var(--surface-2);
+  box-shadow: inset 2px 0 0 var(--working);
+}
+
+.research-tab__index-topic {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.research-tab__index-ts {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.research-tab__reading {
+  overflow-y: auto;
+  padding: 28px 32px 48px;
+}
+
+.research-tab__reading-head {
+  margin-bottom: 18px;
+}
+
+.research-tab__reading-topic {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.25;
+  margin-bottom: 4px;
+  max-width: 72ch;
+}
+
+.research-tab__reading-ts {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+/* Capped measure so prose stays readable even when the pane is very wide. */
+.research-tab__summary {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text);
+  max-width: 72ch;
+}
+
+.research-tab__sources {
+  margin-top: 28px;
+  max-width: 72ch;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.research-tab__sources-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
   margin-bottom: 8px;
 }
 
-.research-card__link {
-  font-size: 12px;
-  color: var(--accent);
-  text-decoration: none;
-  word-break: break-all;
+.research-tab__sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 18px;
 }
 
-.research-card__link:hover {
+.research-tab__source-link {
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-word;
+}
+
+.research-tab__source-link:hover {
   text-decoration: underline;
 }
 
-.research-card__link:visited {
+.research-tab__source-link:visited {
   color: color-mix(in srgb, var(--accent) 65%, var(--text-muted));
 }
 
-.research-card__ts {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-muted);
-  display: block;
+/* Narrow main area: collapse the index to a horizontal scroll strip above the reading pane. */
+@media (max-width: 900px) {
+  .research-tab {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .research-tab__index {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .research-tab__index-list {
+    flex-direction: row;
+    gap: 6px;
+  }
+  .research-tab__index-item {
+    flex-shrink: 0;
+    box-shadow: none;
+    border: 1px solid var(--border);
+  }
+  .research-tab__index-item--selected {
+    box-shadow: none;
+    border-color: var(--working);
+  }
+  .research-tab__reading {
+    padding: 20px 18px 40px;
+  }
 }
 
 /* -------------------------------------------------------------------------
@@ -1412,6 +1761,12 @@ body {
     border-top-color: var(--accent);
   }
   .tp-item--new {
+    animation: none;
+  }
+  .jump-to-live {
+    animation: none;
+  }
+  .view-tab__ready-dot {
     animation: none;
   }
 }

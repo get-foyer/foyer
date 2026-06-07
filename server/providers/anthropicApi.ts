@@ -59,7 +59,7 @@ export class AnthropicApiProvider implements LlmProvider {
 
   async summarizeActivity(
     ctx: ActivityContext,
-  ): Promise<{ summary: string; graph: string; topics: SuggestedTopic[] }> {
+  ): Promise<{ summary: string; graph: string | null; topics: SuggestedTopic[] }> {
     const { buildActivityPrompt } = await import('./codex.js');
     const { parseActivityJson } = await import('./claudeCli.js');
     const client = this.getClient();

@@ -23,21 +23,13 @@ import { readFile, unlink, mkdtemp, rm } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
-import { stripFences, normalizeTopics } from './text.js';
+import { stripFences, normalizeTopics, normalizeGraph } from './text.js';
 import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './internal.js';
 
 const execFile = promisify(_execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = join(__dirname, 'schema', 'mermaid.schema.json');
 const ACTIVITY_SCHEMA_PATH = join(__dirname, 'schema', 'activity.schema.json');
-
-/**
- * Fallback storyline used when a provider returns no graph or unparseable JSON.
- * A valid `graph LR` milestone storyline so it renders, and so the append-only
- * path stays consistent with buildActivityPrompt's contract (subject :::goal node).
- */
-export const FALLBACK_GRAPH =
-  'graph LR\n  G(["Working…"]):::goal\n  classDef goal fill:#161b22,stroke:#4493f8,color:#fff;';
 
 // features.hooks=false disables Codex's own lifecycle hooks at runtime so the
 // internal codex exec calls don't POST back to our /hook endpoint.
@@ -100,7 +92,7 @@ ${planText.slice(0, 4000)}`; // cap to avoid huge context
 
   async summarizeActivity(
     ctx: ActivityContext,
-  ): Promise<{ summary: string; graph: string; topics: SuggestedTopic[] }> {
+  ): Promise<{ summary: string; graph: string | null; topics: SuggestedTopic[] }> {
     const prompt = buildActivityPrompt(ctx);
     const outFile = join(tmpdir(), `foyer-activity-${Date.now()}.json`);
 
@@ -117,7 +109,8 @@ ${planText.slice(0, 4000)}`; // cap to avoid huge context
       const parsed = JSON.parse(raw) as { summary?: string; graph?: string; topics?: unknown };
       return {
         summary: parsed.summary ?? 'Agent is working…',
-        graph: stripFences(parsed.graph ?? FALLBACK_GRAPH),
+        // null = "no workflow warranted this session" → dashboard shows no graph region.
+        graph: normalizeGraph(parsed.graph),
         topics: normalizeTopics(parsed.topics),
       };
     } finally {
@@ -289,6 +282,13 @@ export function buildActivityPrompt(ctx: ActivityContext): string {
     ? ctx.previousTopics.map((t) => `  - ${t.topic}`).join('\n')
     : '(none yet)';
 
+  // Workflow visibility gate (hybrid trigger): when the agent went through plan mode this turn
+  // the work is inherently multi-phase, so always draw a graph. Otherwise the model decides —
+  // trivial/single-step work returns null and the dashboard shows no workflow region at all.
+  const workflowGate = ctx.planned
+    ? 'This turn has an APPROVED PLAN (the agent exited plan mode), so the work is inherently multi-phase — you MUST return a graph; do NOT return null.'
+    : 'FIRST decide whether this session even warrants a workflow graph. If it is a single-step task, a quick question/answer, or trivial linear work with no real phases, set "graph" to null and skip the rules below — the dashboard will simply show no workflow. Only draw a graph when there are genuine multi-phase milestones (about 3 or more). Never invent phases to fill a graph.';
+
   return `You are narrating, for a live dashboard, what a coding agent is doing in a session.
 The dashboard shows many sessions side by side, so the graph must be a GLANCEABLE FINGERPRINT of THIS session: an engineer should glance once and instantly know what the session is about and where it is.
 
@@ -296,7 +296,7 @@ Given the agent's original task, recent file operations, a tail of the agent's t
 
 - "summary": 2-4 sentences of markdown — what the agent is working on at this moment and what it just did. Present tense. No preamble.
 
-- "graph": a Mermaid **graph LR** MILESTONE STORYLINE of the session — follow every rule:
+- "graph": EITHER null, OR a Mermaid **graph LR** MILESTONE STORYLINE of the session. ${workflowGate} When you DO draw a graph, follow every rule:
   1. Nodes are intent-named PHASES of the work (a goal the agent pursued, e.g. "Diagnose token expiry", "Patch auth flow", "Run tests"). NEVER a raw tool call like "Read file.ts" or "Bash npm test".
   2. The FIRST node is a rounded subject node naming the whole session goal in ≤5 words, derived from the original task, tagged with the goal class — for example: G(["Fix login bug"]):::goal
   3. Then 3-6 phase nodes left-to-right in the order they happened. ${activeRule}

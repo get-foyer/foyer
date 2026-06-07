@@ -140,6 +140,16 @@ describe('normalizeSession — schema drift', () => {
     expect(s.suggestedTopics).toEqual([]);
   });
 
+  it('defaults workflowTurnSeq to null on a payload persisted before the field existed', () => {
+    const old = { sessionId: 'old', prompt: 'x', status: 'done', startedAt: 1, finishedAt: 2 };
+    expect(normalizeSession(old)!.workflowTurnSeq).toBeNull();
+  });
+
+  it('preserves a persisted workflowTurnSeq', () => {
+    const s = normalizeSession({ sessionId: 'w', prompt: 'p', startedAt: 1, workflowTurnSeq: 3 })!;
+    expect(s.workflowTurnSeq).toBe(3);
+  });
+
   it('returns null for junk input', () => {
     expect(normalizeSession(null)).toBeNull();
     expect(normalizeSession({})).toBeNull();

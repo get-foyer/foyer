@@ -14,6 +14,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     summary: null,
     focusHistory: [],
     graph: null,
+    workflowTurnSeq: null,
     activityStatus: 'idle',
     activityError: null,
     waitingReason: null,
@@ -28,23 +29,26 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 
 const noop = () => {};
 
+/** Default props so each test only specifies what it cares about. */
+const baseProps = {
+  sessions: [] as Session[],
+  activeSessionId: null as string | null,
+  liveSessionId: null as string | null,
+  followMode: 'follow' as 'follow' | 'held',
+  unseenSessionIds: [] as string[],
+  onFollow: noop,
+  onSelect: noop,
+  onClose: noop,
+};
+
 describe('SessionTabs', () => {
   it('renders one tab button per session in order', () => {
     const sessions = [
       makeSession({ sessionId: 'a', prompt: 'First task' }),
       makeSession({ sessionId: 'b', prompt: 'Second task' }),
     ];
-    render(
-      <SessionTabs
-        sessions={sessions}
-        activeSessionId="a"
-        unseenSessionIds={[]}
-        onSelect={noop}
-        onClose={noop}
-      />,
-    );
+    render(<SessionTabs {...baseProps} sessions={sessions} activeSessionId="a" />);
     const tabs = screen.getAllByRole('button', { name: /first task|second task/i });
-    // The tab buttons contain the prompts (accessible via title/text)
     expect(tabs[0]).toHaveAttribute('title', 'First task');
     expect(tabs[1]).toHaveAttribute('title', 'Second task');
   });
@@ -52,11 +56,9 @@ describe('SessionTabs', () => {
   it('renders an interrupted session with the interrupted status dot', () => {
     render(
       <SessionTabs
+        {...baseProps}
         sessions={[makeSession({ sessionId: 'a', prompt: 'Cut off', status: 'interrupted' })]}
         activeSessionId="a"
-        unseenSessionIds={[]}
-        onSelect={noop}
-        onClose={noop}
       />,
     );
     expect(screen.getByLabelText('interrupted by a restart')).toBeTruthy();
@@ -67,48 +69,21 @@ describe('SessionTabs', () => {
       makeSession({ sessionId: 'a', prompt: 'First task' }),
       makeSession({ sessionId: 'b', prompt: 'Second task' }),
     ];
-    render(
-      <SessionTabs
-        sessions={sessions}
-        activeSessionId="b"
-        unseenSessionIds={[]}
-        onSelect={noop}
-        onClose={noop}
-      />,
-    );
-    // Find tab buttons by title attr
-    const tabA = screen.getByTitle('First task');
-    const tabB = screen.getByTitle('Second task');
-    expect(tabA).not.toHaveAttribute('aria-current');
-    expect(tabB).toHaveAttribute('aria-current', 'true');
+    render(<SessionTabs {...baseProps} sessions={sessions} activeSessionId="b" />);
+    expect(screen.getByTitle('First task')).not.toHaveAttribute('aria-current');
+    expect(screen.getByTitle('Second task')).toHaveAttribute('aria-current', 'true');
   });
 
   it('unseen tab renders the "new activity" indicator', () => {
     const sessions = [makeSession({ sessionId: 'a', prompt: 'Task A' })];
-    render(
-      <SessionTabs
-        sessions={sessions}
-        activeSessionId={null}
-        unseenSessionIds={['a']}
-        onSelect={noop}
-        onClose={noop}
-      />,
-    );
+    render(<SessionTabs {...baseProps} sessions={sessions} unseenSessionIds={['a']} />);
     expect(screen.getByRole('status', { name: 'new activity' })).toBeInTheDocument();
   });
 
   it('clicking a tab fires onSelect with the sessionId', () => {
     const onSelect = vi.fn();
     const sessions = [makeSession({ sessionId: 'a', prompt: 'Task A' })];
-    render(
-      <SessionTabs
-        sessions={sessions}
-        activeSessionId={null}
-        unseenSessionIds={[]}
-        onSelect={onSelect}
-        onClose={noop}
-      />,
-    );
+    render(<SessionTabs {...baseProps} sessions={sessions} onSelect={onSelect} />);
     fireEvent.click(screen.getByTitle('Task A'));
     expect(onSelect).toHaveBeenCalledOnce();
     expect(onSelect).toHaveBeenCalledWith('a');
@@ -119,15 +94,8 @@ describe('SessionTabs', () => {
     const onClose = vi.fn();
     const sessions = [makeSession({ sessionId: 'a', prompt: 'Task A' })];
     render(
-      <SessionTabs
-        sessions={sessions}
-        activeSessionId={null}
-        unseenSessionIds={[]}
-        onSelect={onSelect}
-        onClose={onClose}
-      />,
+      <SessionTabs {...baseProps} sessions={sessions} onSelect={onSelect} onClose={onClose} />,
     );
-    // Close button is labelled "Close session <shortId>"
     const closeBtn = screen.getByRole('button', { name: /close session/i });
     fireEvent.click(closeBtn);
     expect(onClose).toHaveBeenCalledOnce();
@@ -144,28 +112,95 @@ describe('SessionTabs', () => {
         waitingReason: 'Permission requested',
       }),
     ];
-    render(
-      <SessionTabs
-        sessions={sessions}
-        activeSessionId={null}
-        unseenSessionIds={[]}
-        onSelect={noop}
-        onClose={noop}
-      />,
-    );
+    render(<SessionTabs {...baseProps} sessions={sessions} />);
     expect(screen.getByRole('status', { name: 'needs your input' })).toBeInTheDocument();
   });
 
   it('renders the empty-state placeholder when sessions is empty', () => {
+    render(<SessionTabs {...baseProps} sessions={[]} />);
+    expect(screen.getByText('No sessions yet')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Jump-to-live pill (contextual; replaces the persistent FOLLOW/HELD control)
+// ---------------------------------------------------------------------------
+
+describe('SessionTabs — Jump-to-live pill', () => {
+  const queryPill = () => screen.queryByRole('button', { name: /jump to the live session/i });
+
+  it('following → no pill (silent default)', () => {
     render(
       <SessionTabs
-        sessions={[]}
-        activeSessionId={null}
-        unseenSessionIds={[]}
-        onSelect={noop}
-        onClose={noop}
+        {...baseProps}
+        sessions={[makeSession({ sessionId: 'a' }), makeSession({ sessionId: 'b' })]}
+        activeSessionId="a"
+        liveSessionId="b"
+        followMode="follow"
       />,
     );
-    expect(screen.getByText('No sessions yet')).toBeInTheDocument();
+    expect(queryPill()).not.toBeInTheDocument();
+  });
+
+  it('held + live === active (nothing newer) → no pill', () => {
+    render(
+      <SessionTabs
+        {...baseProps}
+        sessions={[makeSession({ sessionId: 'a' })]}
+        activeSessionId="a"
+        liveSessionId="a"
+        followMode="held"
+      />,
+    );
+    expect(queryPill()).not.toBeInTheDocument();
+  });
+
+  it('held + a different visible session live → pill renders, names that session', () => {
+    render(
+      <SessionTabs
+        {...baseProps}
+        sessions={[
+          makeSession({ sessionId: 'a', prompt: 'fix the header' }),
+          makeSession({ sessionId: 'b', prompt: 'add export button' }),
+        ]}
+        activeSessionId="a"
+        liveSessionId="b"
+        followMode="held"
+      />,
+    );
+    // The pill renders AND names the live session (asserted via its accessible name, which is
+    // unique to the pill — the session's own tab also shows the prompt text).
+    expect(
+      screen.getByRole('button', { name: /jump to the live session: add export button/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('held + live points at a non-visible session → no pill (no false catch-up)', () => {
+    render(
+      <SessionTabs
+        {...baseProps}
+        sessions={[makeSession({ sessionId: 'a' })]}
+        activeSessionId="a"
+        liveSessionId="ghost"
+        followMode="held"
+      />,
+    );
+    expect(queryPill()).not.toBeInTheDocument();
+  });
+
+  it('clicking the pill fires onFollow', () => {
+    const onFollow = vi.fn();
+    render(
+      <SessionTabs
+        {...baseProps}
+        sessions={[makeSession({ sessionId: 'a' }), makeSession({ sessionId: 'b' })]}
+        activeSessionId="a"
+        liveSessionId="b"
+        followMode="held"
+        onFollow={onFollow}
+      />,
+    );
+    fireEvent.click(queryPill()!);
+    expect(onFollow).toHaveBeenCalledOnce();
   });
 });

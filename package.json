@@ -1,5 +1,5 @@
 {
-  "name": "agent-foyer",
+  "name": "foyer-gate",
   "version": "0.1.0",
   "description": "A pull-forward dashboard that turns Claude Code agent waits into focused, in-context time.",
   "type": "module",

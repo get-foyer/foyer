@@ -1,4 +1,4 @@
-# Contributing to Agent Foyer
+# Contributing to Foyer Gate
 
 ## Prerequisites
 

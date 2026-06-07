@@ -21,8 +21,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdtemp, rm } from 'fs/promises';
 import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
-import { stripFences, normalizeTopics } from './text.js';
-import { FALLBACK_GRAPH } from './codex.js';
+import { stripFences, normalizeTopics, normalizeGraph } from './text.js';
 import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './internal.js';
 
 const execFile = promisify(_execFile);
@@ -70,7 +69,7 @@ export class ClaudeCliProvider implements LlmProvider {
 
   async summarizeActivity(
     ctx: ActivityContext,
-  ): Promise<{ summary: string; graph: string; topics: SuggestedTopic[] }> {
+  ): Promise<{ summary: string; graph: string | null; topics: SuggestedTopic[] }> {
     const { buildActivityPrompt } = await import('./codex.js');
     const prompt = buildActivityPrompt(ctx);
     // Pin to a fast/cheap model — summarisation runs often and doesn't need the
@@ -81,12 +80,11 @@ export class ClaudeCliProvider implements LlmProvider {
   }
 
   async research(topic: string): Promise<ResearchResult> {
-    const result = await this.run(RESEARCH_PROMPT(topic), [
-      '--allowedTools',
-      'WebSearch,WebFetch',
-      '--output-format',
-      'text',
-    ]);
+    // NOTE: do NOT pass '--output-format' here. buildClaudeArgs() already sets
+    // '--output-format json' and run() parses the JSON envelope ({ result }).
+    // A second '--output-format' (text) would override it, the CLI would emit
+    // plain text, JSON.parse(stdout) would throw, and /research would 500.
+    const result = await this.run(RESEARCH_PROMPT(topic), ['--allowedTools', 'WebSearch,WebFetch']);
     return parseResearchText(result);
   }
 
@@ -168,7 +166,7 @@ export function buildClaudeArgs(sentinelPrompt: string, extraArgs: string[]): st
  */
 export function parseActivityJson(raw: string): {
   summary: string;
-  graph: string;
+  graph: string | null;
   topics: SuggestedTopic[];
 } {
   // Strip any accidental markdown fences around the JSON
@@ -178,17 +176,17 @@ export function parseActivityJson(raw: string): {
     .trim();
   try {
     const parsed = JSON.parse(cleaned) as Record<string, unknown>;
-    const graphRaw = typeof parsed.graph === 'string' ? parsed.graph : FALLBACK_GRAPH;
     return {
       summary: typeof parsed.summary === 'string' ? parsed.summary : 'Agent is working…',
-      graph: stripFences(graphRaw),
+      // null = no workflow warranted this session (trivial work) → dashboard shows no graph region.
+      graph: normalizeGraph(parsed.graph),
       topics: normalizeTopics(parsed.topics),
     };
   } catch {
-    // If JSON parse fails, treat the whole thing as a summary with a fallback graph
+    // Unparseable JSON: no structured graph to show → null (no workflow); keep the text as summary.
     return {
       summary: raw.slice(0, 800) || 'Agent is working…',
-      graph: FALLBACK_GRAPH,
+      graph: null,
       topics: [],
     };
   }
