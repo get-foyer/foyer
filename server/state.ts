@@ -376,6 +376,15 @@ export function clearWaiting(sessionId: string): boolean {
   return true;
 }
 
+/** Invoked when a session reaches a terminal state (done), so server-only side caches —
+ *  research prefetch today — can free per-session state. Injected at boot to keep state.ts
+ *  dependency-free: the import direction stays one-way (prefetch → state, never the reverse),
+ *  so this is a function pointer, not an import. */
+let sessionEndListener: ((sessionId: string) => void) | null = null;
+export function setSessionEndListener(cb: ((sessionId: string) => void) | null): void {
+  sessionEndListener = cb;
+}
+
 export function finishSession(sessionId: string): boolean {
   const s = sessions.get(sessionId);
   if (!s) return false;
@@ -384,6 +393,10 @@ export function finishSession(sessionId: string): boolean {
   s.finishedAt = Date.now();
   plannedTurn.delete(sessionId); // ephemeral marker — drop on terminal transition
   flushNow(sessionId); // lifecycle transition — persist immediately
+  // Free server-only side caches (prefetch). Without this the prefetch cache was freed only
+  // on explicit /close, so done/stale/turn-end sessions leaked warmed entries for the life of
+  // the daemon. A reopen (new prompt) re-warms via the /activity poll.
+  sessionEndListener?.(sessionId);
   return true;
 }
 

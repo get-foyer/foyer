@@ -17,6 +17,7 @@ import {
   initPersistence,
   hydrateSessions,
   closeSession,
+  setSessionEndListener,
   flushAll,
 } from './state.js';
 import {
@@ -179,6 +180,10 @@ async function boot() {
   // Let the SSE layer replay primed-research dots on (re)connect without importing prefetch.ts
   // (avoids an sse↔prefetch cycle — prefetch already imports broadcast from sse).
   setPrimedTopicsProvider(getPrimedTopics);
+
+  // Free a session's prefetch cache when it ends (done/stale/turn-end), mirroring the /close
+  // path. Injected so state.ts stays free of a prefetch import (one-way: prefetch → state).
+  setSessionEndListener(clearPrefetch);
 
   // Persistence: install the JSON store and hydrate prior sessions before serving, so the
   // first SSE snapshot already carries them. createJsonStore falls back to in-memory only

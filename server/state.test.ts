@@ -19,6 +19,7 @@ import {
   initPersistence,
   hydrateSessions,
   closeSession,
+  setSessionEndListener,
   flushAll,
   markPlanned,
 } from './state.js';
@@ -41,6 +42,28 @@ const act = (over: Partial<Parameters<typeof setActivity>[1]> = {}) => ({
 
 beforeEach(() => {
   _resetStateForTest();
+  setSessionEndListener(null); // module-level; reset so listener tests don't bleed
+});
+
+// ---------------------------------------------------------------------------
+// session-end listener (prefetch cache cleanup hook)
+// ---------------------------------------------------------------------------
+
+describe('setSessionEndListener', () => {
+  it('fires on finishSession with the session id (frees prefetch state on natural end)', () => {
+    const ended: string[] = [];
+    setSessionEndListener((id) => ended.push(id));
+    startSession('s1', 'work');
+    finishSession('s1');
+    expect(ended).toEqual(['s1']);
+  });
+
+  it('does not fire when finishSession is a no-op (unknown session)', () => {
+    const ended: string[] = [];
+    setSessionEndListener((id) => ended.push(id));
+    expect(finishSession('nope')).toBe(false);
+    expect(ended).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

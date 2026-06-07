@@ -69,11 +69,17 @@ export function WorkflowGraph({ graph }: Props) {
     ensureMermaid();
     setRenderError(null);
 
+    // mermaid.render is async; `graph` can change (every activity tick) before a render
+    // resolves. Without this guard, two in-flight renders race and the later-resolving one
+    // clobbers the container with a stale storyline. The cleanup flips `cancelled` so a
+    // superseded render's .then/.catch becomes a no-op.
+    let cancelled = false;
     const id = `foyer-graph-${++idRef.current}`;
 
     mermaid
       .render(id, graph)
       .then(({ svg }) => {
+        if (cancelled) return;
         if (containerRef.current) {
           // Sanitize the SVG before injecting to prevent XSS.
           // USE_PROFILES.svg permits SVG elements while stripping script/handlers.
@@ -100,8 +106,13 @@ export function WorkflowGraph({ graph }: Props) {
         }
       })
       .catch((err: unknown) => {
+        if (cancelled) return;
         setRenderError(err instanceof Error ? err.message : String(err));
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [graph]);
 
   if (renderError) {
