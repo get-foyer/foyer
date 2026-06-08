@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { stripFences, normalizeTopics, normalizeWhitespace, normalizeGraph } from './text.js';
+import {
+  stripFences,
+  normalizeTopics,
+  normalizeWhitespace,
+  normalizeGraph,
+  RESEARCH_PROMPT,
+  parseResearchSections,
+} from './text.js';
 
 // ---------------------------------------------------------------------------
 // stripFences — canonical test suite (replaces the duplicate blocks that
@@ -171,5 +178,98 @@ describe('normalizeWhitespace', () => {
 
   it('returns empty string for whitespace-only input', () => {
     expect(normalizeWhitespace('   \n\t ')).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RESEARCH_PROMPT — the shared structured-briefing instruction
+// ---------------------------------------------------------------------------
+
+describe('RESEARCH_PROMPT', () => {
+  it('embeds the topic and asks for the structured JSON shape', () => {
+    const p = RESEARCH_PROMPT('React Server Components');
+    expect(p).toContain('React Server Components');
+    expect(p).toMatch(/"lede"/);
+    expect(p).toMatch(/"sections"/);
+    expect(p).toMatch(/"sources"/);
+  });
+
+  it('states the adaptive rule (single section for simple topics, diagram only when it helps)', () => {
+    const p = RESEARCH_PROMPT('x');
+    expect(p).toMatch(/SINGLE section/i);
+    expect(p).toMatch(/do not invent sections/i);
+    expect(p).toMatch(/ONLY when a visual genuinely aids/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseResearchSections — structured briefing parser (with single-section fallback)
+// ---------------------------------------------------------------------------
+
+describe('parseResearchSections', () => {
+  it('parses a valid briefing JSON into lede + sections + sources', () => {
+    const raw = JSON.stringify({
+      lede: 'A gist.',
+      sections: [{ heading: 'Overview', body: 'Body.' }],
+      sources: [{ title: 'Docs', url: 'https://example.com' }],
+    });
+    const r = parseResearchSections(raw, 'topic');
+    expect(r.lede).toBe('A gist.');
+    expect(r.sections).toEqual([{ heading: 'Overview', body: 'Body.' }]);
+    expect(r.sources).toEqual([{ title: 'Docs', url: 'https://example.com' }]);
+  });
+
+  it('strips ```json fences before parsing', () => {
+    const raw = '```json\n' + JSON.stringify({ sections: [{ heading: 'H', body: 'B' }] }) + '\n```';
+    const r = parseResearchSections(raw, 'topic');
+    expect(r.sections[0]).toEqual({ heading: 'H', body: 'B' });
+  });
+
+  it('extracts the JSON object when the model wraps it in prose preamble', () => {
+    const raw =
+      'Here is your briefing:\n' + JSON.stringify({ sections: [{ heading: 'H', body: 'B' }] });
+    const r = parseResearchSections(raw, 'topic');
+    expect(r.sections[0].heading).toBe('H');
+  });
+
+  it('falls back to a single section (heading = topic) on non-JSON prose — never throws', () => {
+    const r = parseResearchSections('totally not json', 'My Topic');
+    expect(r.sections).toEqual([{ heading: 'My Topic', body: 'totally not json' }]);
+    expect(r.lede).toBe('');
+    expect(r.sources).toEqual([]);
+  });
+
+  it('falls back when JSON parses but yields zero usable sections (all bodies empty)', () => {
+    const raw = JSON.stringify({ lede: 'x', sections: [{ heading: 'H' }, { body: '' }] });
+    const r = parseResearchSections(raw, 'T');
+    expect(r.sections).toHaveLength(1);
+    expect(r.sections[0].heading).toBe('T');
+  });
+
+  it('keeps a fence-stripped diagram and drops one past the size cap', () => {
+    const okDiagram = '```mermaid\nflowchart LR\n  A-->B\n```';
+    const huge = 'flowchart LR\n' + 'A-->B\n'.repeat(2000); // > 4000 chars
+    const raw = JSON.stringify({
+      sections: [
+        { heading: 'Has diagram', body: 'b', diagram: okDiagram },
+        { heading: 'Too big', body: 'b', diagram: huge },
+      ],
+    });
+    const r = parseResearchSections(raw, 'T');
+    expect(r.sections[0].diagram).toBe('flowchart LR\n  A-->B');
+    expect(r.sections[1].diagram).toBeUndefined();
+  });
+
+  it('drops sources without a valid http(s) url and dedupes', () => {
+    const raw = JSON.stringify({
+      sections: [{ heading: 'H', body: 'B' }],
+      sources: [
+        { title: 'Good', url: 'https://a.example' },
+        { title: 'Dupe', url: 'https://a.example' },
+        { title: 'Bad', url: 'not-a-url' },
+      ],
+    });
+    const r = parseResearchSections(raw, 'T');
+    expect(r.sources).toEqual([{ title: 'Good', url: 'https://a.example' }]);
   });
 });

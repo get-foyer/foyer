@@ -11,9 +11,24 @@ export interface ResearchLink {
   url: string;
 }
 
+/**
+ * One section of a documentation-style research briefing. `body` is GitHub-flavored
+ * markdown (prose, lists, tables); `diagram` is optional raw Mermaid source rendered as a
+ * figure under the body. A trivial topic comes back as a single section (no manufactured
+ * structure) — see the adaptive rule in the research prompt.
+ */
+export interface ResearchSection {
+  heading: string;
+  body: string;
+  diagram?: string;
+}
+
 export interface ResearchResult {
   topic: string;
-  summary: string;
+  /** 1-2 sentence TL;DR shown above the sections so the glance-reader gets the gist first. */
+  lede: string;
+  /** Ordered doc sections; always >= 1. */
+  sections: ResearchSection[];
   links: ResearchLink[];
   ts: number;
 }

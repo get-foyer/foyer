@@ -483,7 +483,13 @@ describe('setActivity — suggested topics', () => {
 
   it('excludes topics already researched (case-insensitive)', () => {
     startSession('s', 'task');
-    addResearch('s', { topic: 'React useTransition', summary: 'x', links: [], ts: 1 });
+    addResearch('s', {
+      topic: 'React useTransition',
+      lede: '',
+      sections: [{ heading: 'React useTransition', body: 'x' }],
+      links: [],
+      ts: 1,
+    });
     setActivity('s', act({ topics: [topic('react USEtransition'), topic('Mermaid graph LR')] }));
     const s = getSession('s')!;
     expect(s.suggestedTopics.map((t) => t.topic)).toEqual(['Mermaid graph LR']);
@@ -516,7 +522,13 @@ describe('addResearch — chip removal', () => {
     setActivity('s', act({ topics: [topic('React useTransition'), topic('Mermaid graph LR')] }));
     addResearchInFlight('s', 'React useTransition');
 
-    addResearch('s', { topic: 'React useTransition', summary: 'x', links: [], ts: 1 });
+    addResearch('s', {
+      topic: 'React useTransition',
+      lede: '',
+      sections: [{ heading: 'React useTransition', body: 'x' }],
+      links: [],
+      ts: 1,
+    });
 
     const s = getSession('s')!;
     expect(s.research).toHaveLength(1);
