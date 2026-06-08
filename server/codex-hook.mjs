@@ -3,7 +3,7 @@
  * Codex lifecycle hook shim — installed as a command hook in ~/.codex/config.toml.
  *
  * Codex passes event JSON on stdin. This script reads it and POSTs to the
- * Foyer Gate /hook endpoint, wrapping it in a { source:'codex' } envelope so
+ * Foyer Lobby /hook endpoint, wrapping it in a { source:'codex' } envelope so
  * the server can normalise Codex vs Claude payloads.
  *
  * Usage (installed by pnpm setup):

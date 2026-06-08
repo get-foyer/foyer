@@ -1,7 +1,7 @@
 {
-  "name": "foyer-gate",
+  "name": "@getfoyer/lobby",
   "version": "0.1.0",
-  "description": "A pull-forward dashboard that turns Claude Code agent waits into focused, in-context time.",
+  "description": "A local focus and learning dashboard for AI agent sessions.",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n server,vite -c cyan,magenta \"tsx watch server/index.ts\" \"vite\"",

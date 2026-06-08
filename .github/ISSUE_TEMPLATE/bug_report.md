@@ -19,7 +19,7 @@ What you expected to happen.
 - OS:
 - Node version (`node --version`):
 - LLM provider (codex / claude-cli / anthropic-api):
-- Foyer Gate version:
+- Foyer Lobby version:
 
 **Logs / error output**
 

@@ -23,7 +23,7 @@ export const cfg = {
   anthropicModel: process.env.FOYER_ANTHROPIC_MODEL ?? 'claude-haiku-4-5',
   isDev: process.env.NODE_ENV !== 'production',
   /** Where session state persists. Per-user data dir, never the npm install dir. */
-  dataDir: process.env.FOYER_DATA_DIR ?? join(homedir(), '.foyer-gate'),
+  dataDir: process.env.FOYER_DATA_DIR ?? join(homedir(), '.foyer-lobby'),
   /** How many of the viewed session's top suggested topics to speculatively prefetch in the
    *  background so a tap is instant. 0 disables prefetch entirely (pure reactive — ADR 0001). */
   prefetchTopics: nonNegInt(process.env.FOYER_PREFETCH_TOPICS, 3),

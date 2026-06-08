@@ -1,5 +1,5 @@
 /**
- * Safely merge / unmerge Foyer Gate hooks into a Claude Code settings.json
+ * Safely merge / unmerge Foyer Lobby hooks into a Claude Code settings.json
  * and a Codex config.toml.
  *
  * Rules:
@@ -160,7 +160,7 @@ export function codexHookCommand(shimPath: string, port: number, event: string):
 const CODEX_EVENTS = ['PermissionRequest', 'UserPromptSubmit', 'PostToolUse', 'Stop'] as const;
 
 /** Marker embedded in Codex entries so we can find and remove them. */
-const FOYER_MARKER = 'foyer-gate-managed';
+const FOYER_MARKER = 'foyer-lobby-managed';
 
 export async function installCodexHooks(
   configPath: string,

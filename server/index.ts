@@ -308,7 +308,7 @@ async function boot() {
   }
 
   const server = app.listen(cfg.port, '127.0.0.1', () => {
-    console.log(`\n🚪 Foyer Gate running at http://localhost:${cfg.port}`);
+    console.log(`\nFoyer Lobby running at http://localhost:${cfg.port}`);
     if (cfg.isDev) {
       console.log(`   React app: http://localhost:5173  (run \`npm run dev\`)`);
     } else {
@@ -329,7 +329,7 @@ async function boot() {
     if (err.code === 'EADDRINUSE') {
       console.error(
         `\n✗ Port ${cfg.port} is already in use.\n` +
-          `  Another Foyer Gate (or another process) may be running on that port.\n` +
+          `  Another Foyer Lobby (or another process) may be running on that port.\n` +
           `  → Stop the other process, or use a different port:\n` +
           `    FOYER_PORT=<port> npm start\n`,
       );
