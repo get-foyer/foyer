@@ -424,8 +424,10 @@ export function reducer(state: State, action: Action): State {
       // Session not found → no-op (updateSession returned state unchanged).
       if (patched === state) return state;
       // The chip is gone — clear its primed dot too (it's about to render as a result card).
-      const primedForSession = patched.primedTopics[sessionId];
-      if (primedForSession?.includes(key)) {
+      // `wasPrimed` (the tap was on an amber "ready" chip) also drives the instant auto-open below.
+      const primedForSession = patched.primedTopics[sessionId] ?? [];
+      const wasPrimed = primedForSession.includes(key);
+      if (wasPrimed) {
         patched = {
           ...patched,
           primedTopics: {
@@ -443,6 +445,20 @@ export function reducer(state: State, action: Action): State {
             ...patched.warmingTopics,
             [sessionId]: warmingForSession.filter((k) => k !== key),
           },
+        };
+      }
+      // A WARMED tap (amber dot) returns instantly, so reveal it instantly: switch the active
+      // session to its Research tab and select this briefing (the explicit select overrides any
+      // older briefing the user had open, which would otherwise shadow the just-tapped one). A cold
+      // tap (~20s) instead just badges below — don't steal focus on a slow completion the user may
+      // have navigated away from. The active-session guard skips the switch if the result lands for
+      // a session the user already left.
+      if (wasPrimed && state.activeSessionId === sessionId) {
+        return {
+          ...patched,
+          viewBySession: { ...patched.viewBySession, [sessionId]: 'research' },
+          selectedResearchBySession: { ...patched.selectedResearchBySession, [sessionId]: ts },
+          researchUnseen: patched.researchUnseen.filter((id) => id !== sessionId),
         };
       }
       // Badge the Research tab unless you're already looking at it for this session. Results
