@@ -18,6 +18,7 @@ import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { installHooks, installCodexHooks } from '../server/install.js';
+import { showGateBanner } from '../server/banner.js';
 
 const execFile = promisify(_execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -55,7 +56,7 @@ function detectAnthropicApiKey(): string | null {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  console.log('\n🚪 Foyer Gate — Setup\n');
+  await showGateBanner({ subtitle: 'Setup' });
   console.log('This wizard configures your LLM backend, Claude Code hooks, and dashboard port.');
   console.log('You can re-run `pnpm setup` at any time to reconfigure.\n');
 
