@@ -34,6 +34,24 @@ Deferred work, captured with enough context to pick up cold.
   Trigger to act: storyline shows nodes that don't correspond to substantive phases. ~1h human / ~15m CC.
 - **Depends on / blocked by:** ADR 0004 (shipped in this PR). Needs dogfooding evidence first.
 
+## Codex research-tier: give research its own reasoning effort
+
+- **What:** Split the codex provider's single `FAST_FLAGS` so `research()` uses its own
+  `RESEARCH_FLAGS` (`model_reasoning_effort=medium`, env-overridable via `FOYER_CODEX_RESEARCH_EFFORT`),
+  instead of sharing the low-effort tier with the high-frequency `generateGraph`/`summarizeActivity`
+  calls. Mirrors the Claude side, where research is pinned to Sonnet while summary/graph stay on Haiku.
+- **Why:** Research is low-frequency, user-initiated, and its briefing is the thing the user actually
+  reads — synthesis quality matters more than for the trivial hot-path calls. Codex research currently
+  runs at `low` effort (same as the trivial calls), so the briefing quality is capped.
+- **Pros:** Better codex briefings; full symmetry with the Claude provider's per-call-type tiering.
+- **Cons:** Higher cost/latency per codex research call; the quality gain is unvalidated (codex research
+  already works, this is polish, not a bug fix).
+- **Context:** `FAST_FLAGS` is at `server/providers/codex.ts:47`; all three calls (`generateGraph`,
+  `summarizeActivity`, `research`) currently spread it. Only `research()` (`codex.ts:121-135`) should
+  switch to `RESEARCH_FLAGS`. The Claude analog shipped in the `claudeCli.ts` research-timeout fix
+  (`RESEARCH_MODEL` + `FOYER_CLAUDE_CLI_RESEARCH_MODEL`). ~15m human / ~5m CC.
+- **Depends on / blocked by:** None. Independent polish.
+
 ## Auto-surface waiting / permission sessions
 
 - **What:** Optionally move the view to a background session that becomes blocked on you (permission
@@ -48,3 +66,59 @@ Deferred work, captured with enough context to pick up cold.
   to an opt-in client behavior, distinct from the `active` focus signal. Deliberately a non-goal of
   the "Follow the live channel" feature. ~1 day human / ~1-2h CC.
 - **Depends on / blocked by:** The follow/hold model (shipped); should not override an explicit hold.
+
+## Fix the `handleTranscriptChange` interleaving race
+
+- **What:** In the transcript turn-end watcher, `m.lastWatchedOffset` is updated _after_ the
+  `await readTranscriptFrom(...)` (`server/activity.ts`, in `handleTranscriptChange`). Two rapid
+  `fs.watch` `change` events can interleave at that await: both read from the same stale offset,
+  double-process the overlapping content, and the offset can regress. Fix by updating the offset
+  before the await (or guarding the handler with an in-flight flag per session).
+- **Why:** Correctness of the turn-end / ESC-interrupt detector. Today the damage is bounded —
+  `finishSession` is status-guarded and idempotent, so a double-process just re-detects the same
+  turn end harmlessly — which is why it's deferred, not fixed now.
+- **Pros:** Removes a real race from the watcher; makes the offset bookkeeping trustworthy if the
+  watcher is ever extended.
+- **Cons:** Concurrency-correctness work on a path that is benign today; needs a test that simulates
+  interleaved change events.
+- **Context:** Surfaced by the Codex outside voice during the live-summary-poll review. The poll fix
+  deliberately does NOT depend on this watcher (it polls transcript size instead), so this is isolated
+  cleanup. `handleTranscriptChange` is in `server/activity.ts`. ~20m human / ~6m CC.
+- **Depends on / blocked by:** None. Independent of the live size-poll (shipped separately).
+
+## Global cap on concurrent summarisation calls
+
+- **What:** `run()`'s single-flight is per-session, not global. With many simultaneously `working`
+  sessions all growing their transcripts, the 5s live size-poll (`runLiveSummaryPass`) can fan out up
+  to N concurrent `provider.summarizeActivity` calls each tick. Add a global concurrency cap / queue
+  if this ever matters.
+- **Why:** Protects a local CLI provider (each call spawns a `claude -p` / `codex exec` subprocess)
+  from being swamped when many agents run at once.
+- **Pros:** Predictable provider load under heavy multi-session use.
+- **Cons:** Pure speculation for a solo-dev tool — realistic concurrent-working-session counts are
+  1-3, and the pre-existing PostToolUse path already has the same per-session-only property. Premature
+  to build now.
+- **Context:** Surfaced as a failure mode in the live-summary-poll eng review (accepted, deferred).
+  Would live alongside the single-flight guard in `server/activity.ts`. Trigger to act: provider
+  slowness observed with many concurrent sessions. ~1-2h human / ~20m CC.
+- **Depends on / blocked by:** None.
+
+## Touch-reachable session controls (⋯ and ×)
+
+- **What:** A touch-reachable way to open the per-row options (`⋯`) menu and the close (`×`)
+  button. Both are hover-revealed (`opacity:0` until `.session-tab-row:hover`), so on a tablet /
+  touch laptop with no hover they can't be reached — which means pinning and closing are
+  unreachable on touch.
+- **Why:** Pinning (ADR 0005) and closing are useful actions that are simply unavailable without a
+  mouse. The hover-reveal keeps rows calm per DESIGN.md ("controls recede"), the right default for
+  the terminal-native, mouse-driven user, but it shouldn't be the _only_ path.
+- **Pros:** Pin/close work on touch; no silent dead-ends on tablets.
+- **Cons:** Adds persistent chrome (always-visible controls) or a long-press handler that fights
+  "controls recede" — likely over-building for a near-entirely mouse-driven local dashboard.
+- **Context:** Both controls live in `SessionTabs.tsx` (`.session-tab__menu`, `.session-tab__close`)
+  and share the `.session-tab-row:hover { opacity:1 }` reveal in `src/styles.css`. Options when it
+  matters: keep the controls visible under `@media (pointer: coarse)`, or add a long-press
+  affordance. From plan-eng-review D3 (deferred in favour of the mouse-driven happy path). ~2h
+  human / ~25m CC.
+- **Depends on / blocked by:** Session pinning (shipped, ADR 0005). Needs evidence the dashboard is
+  actually used on touch devices before it's worth the chrome.

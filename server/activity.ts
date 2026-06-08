@@ -9,10 +9,14 @@
  *   - Rerun-on-growth: if transcript grew while a call was in-flight, one
  *     follow-up run fires immediately after the in-flight call resolves
  *
- * Triggered three ways:
+ * Triggered four ways:
  *   1. scheduleSummarize(sessionId)  — from PostToolUse (debounced, any session)
  *   2. summarizeNow(sessionId)       — from Stop and POST /activity (no debounce)
  *   3. POST /activity {sessionId}    — client poll for the viewed session (30s)
+ *   4. startLiveSummaryPoll()        — server-side 5s poll over ALL working sessions;
+ *      re-summarises on transcript growth. The primary path for assistant-text-only turns:
+ *      Claude Code fires no hook when the agent emits text without a tool call, so without
+ *      this the Current Focus panel freezes until the next tool hook or the viewed-tab poll.
  */
 import { watch } from 'fs';
 import type { FSWatcher } from 'fs';
@@ -129,6 +133,15 @@ export function stopTranscriptWatcher(sessionId: string): void {
   m.transcriptWatcher = null;
 }
 
+/** Drop all scheduler/watch state for a session that left the live in-memory window. */
+export function forgetActivitySession(sessionId: string): void {
+  const m = meta.get(sessionId);
+  if (!m) return;
+  if (m.debounceTimer !== null) clearTimeout(m.debounceTimer);
+  if (m.transcriptWatcher !== null) m.transcriptWatcher.close();
+  meta.delete(sessionId);
+}
+
 /** Clear all per-session state (test teardown only). */
 export function _resetActivityForTest(): void {
   for (const m of meta.values()) {
@@ -243,17 +256,37 @@ async function handleTranscriptChange(
  */
 const STALE_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
 const STALE_CHECK_INTERVAL_MS = 30_000; // check every 30 s
+/** How often the live size-poll checks every working session for transcript growth. */
+const LIVE_POLL_MS = 5_000;
+
+/** A working session that has a known transcript path — the unit both background loops act on. */
+type LiveSession = NonNullable<ReturnType<typeof getSession>>;
+interface LiveSessionEntry {
+  sessionId: string;
+  m: SessionMeta;
+  session: LiveSession;
+  transcriptPath: string;
+}
+
+/**
+ * Yield every working session that has a recorded transcript path. Shared by the stale-session
+ * watcher and the live size-poll so the "is this session live and watchable?" guard lives once.
+ */
+function* eachWorkingSessionWithTranscript(): Generator<LiveSessionEntry> {
+  for (const [sessionId, m] of meta.entries()) {
+    const session = getSession(sessionId);
+    if (!session || session.status !== 'working' || !m.transcriptPath) continue;
+    yield { sessionId, m, session, transcriptPath: m.transcriptPath };
+  }
+}
 
 export function startStaleSessionWatcher(): void {
   setInterval(async () => {
-    for (const [sessionId, m] of meta.entries()) {
-      const session = getSession(sessionId);
-      // Only working sessions with a known transcript path
-      if (!session || session.status !== 'working' || !m.transcriptPath) continue;
+    for (const { sessionId, m, session, transcriptPath } of eachWorkingSessionWithTranscript()) {
       // Grace period: don't fire on sessions younger than the threshold
       if (Date.now() - session.startedAt < STALE_THRESHOLD_MS) continue;
 
-      const mtime = await getTranscriptMtime(m.transcriptPath);
+      const mtime = await getTranscriptMtime(transcriptPath);
       if (mtime === null) continue;
 
       if (Date.now() - mtime > STALE_THRESHOLD_MS) {
@@ -270,6 +303,33 @@ export function startStaleSessionWatcher(): void {
       }
     }
   }, STALE_CHECK_INTERVAL_MS);
+}
+
+/**
+ * One pass of the live size-poll: for every working session, re-summarise if its transcript grew
+ * since the last summary. This is the primary trigger for assistant-text-only turns — Claude Code
+ * fires no hook when the agent emits text without a tool call, so without this the Current Focus
+ * panel would freeze until the next tool hook or the viewed-tab 30s poll.
+ *
+ * The byte-size growth pre-check is deliberate: run() does NOT skip when the transcript is absent
+ * (no-transcript sessions summarise by design — see index.ts), so calling it unconditionally on a
+ * session whose file briefly doesn't exist would fire empty-context LLM calls every tick. run()'s
+ * own skip-if-unchanged + single-flight remain the authoritative cost guards once we do call it.
+ *
+ * Exported for unit tests.
+ */
+export async function runLiveSummaryPass(): Promise<void> {
+  for (const { sessionId, m, transcriptPath } of eachWorkingSessionWithTranscript()) {
+    const size = await getTranscriptSize(transcriptPath);
+    if (size === null) continue; // file not present yet — nothing to summarise
+    if (m.lastSummarizedSize !== null && size <= m.lastSummarizedSize) continue; // no growth
+    void run(sessionId);
+  }
+}
+
+/** Start the live size-poll (every LIVE_POLL_MS). Call once at server startup. */
+export function startLiveSummaryPoll(): void {
+  setInterval(() => void runLiveSummaryPass(), LIVE_POLL_MS);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { SummaryPanel } from './SummaryPanel';
 import type { FocusEntry } from '../types';
 
@@ -42,7 +42,7 @@ function renderPanel(over: Partial<PanelProps> = {}) {
 }
 
 describe('SummaryPanel', () => {
-  it('renders the latest focus entry as the current focus', () => {
+  it('renders the latest focus entry', () => {
     renderPanel({ focusHistory: [entry({ id: 'e-2', summary: 'latest narration' })] });
     expect(screen.getByText('latest narration')).toBeTruthy();
   });
@@ -52,12 +52,7 @@ describe('SummaryPanel', () => {
     expect(screen.getByText('raw summary')).toBeTruthy();
   });
 
-  it('hides the "Previously" section when there is ≤1 entry', () => {
-    renderPanel({ focusHistory: [entry()] });
-    expect(screen.queryByText('Previously')).toBeNull();
-  });
-
-  it('shows the "Previously" section with older entries grouped by turn', () => {
+  it('shows every summary at once — no "Previously" toggle, no per-card expand', () => {
     renderPanel({
       focusHistory: [
         entry({ id: 'e-3', summary: 'current', turnSeq: 2, turnPrompt: 'second turn' }),
@@ -65,27 +60,57 @@ describe('SummaryPanel', () => {
         entry({ id: 'e-1', summary: 'first step', turnSeq: 1, turnPrompt: 'first turn' }),
       ],
     });
-    const toggle = screen.getByRole('button', { name: /Previously/ });
-    expect(toggle).toBeTruthy();
-
-    fireEvent.click(toggle);
-    const timeline = screen.getByLabelText('Earlier focus history');
-    expect(within(timeline).getByText('first turn')).toBeTruthy();
-    expect(within(timeline).queryByText('second turn')).toBeNull();
+    // No interaction required: every summary is visible up front.
+    expect(screen.getByText('current')).toBeTruthy();
+    expect(screen.getByText('middle step')).toBeTruthy();
+    expect(screen.getByText('first step')).toBeTruthy();
+    // The collapsible "Previously" control is gone.
+    expect(screen.queryByText('Previously')).toBeNull();
   });
 
-  it('expands a focus card to reveal its full summary', () => {
-    renderPanel({
+  it('renders entries oldest → newest with turn dividers when history spans turns', () => {
+    const { container } = renderPanel({
       focusHistory: [
-        entry({ id: 'e-2', summary: 'current' }),
-        entry({ id: 'e-1', summary: 'older detailed narration' }),
+        entry({ id: 'e-3', summary: 'newest', ts: 3, turnSeq: 2, turnPrompt: 'second turn' }),
+        entry({ id: 'e-2', summary: 'middle', ts: 2, turnSeq: 1, turnPrompt: 'first turn' }),
+        entry({ id: 'e-1', summary: 'oldest', ts: 1, turnSeq: 1, turnPrompt: 'first turn' }),
       ],
     });
-    fireEvent.click(screen.getByRole('button', { name: /Previously/ }));
-    const timeline = screen.getByLabelText('Earlier focus history');
-    const cardHeader = within(timeline).getAllByRole('button')[0];
-    fireEvent.click(cardHeader);
-    expect(within(timeline).getByText('older detailed narration')).toBeTruthy();
+    const texts = Array.from(container.querySelectorAll('.focus-entry__summary')).map((n) =>
+      n.textContent?.trim(),
+    );
+    expect(texts).toEqual(['oldest', 'middle', 'newest']);
+    // Both turn dividers are shown inline (chronological: first turn, then second).
+    expect(screen.getByText('first turn')).toBeTruthy();
+    expect(screen.getByText('second turn')).toBeTruthy();
+  });
+
+  it('omits turn dividers when all entries belong to one turn', () => {
+    const { container } = renderPanel({
+      focusHistory: [
+        entry({ id: 'e-2', summary: 'second', turnSeq: 1, turnPrompt: 'only turn' }),
+        entry({ id: 'e-1', summary: 'first', turnSeq: 1, turnPrompt: 'only turn' }),
+      ],
+    });
+    expect(container.querySelector('.focus-group__divider')).toBeNull();
+  });
+
+  it('marks only the newest entry live while the session is working', () => {
+    const { container } = renderPanel({
+      sessionStatus: 'working',
+      focusHistory: [
+        entry({ id: 'e-2', summary: 'now', ts: 2 }),
+        entry({ id: 'e-1', summary: 'before', ts: 1 }),
+      ],
+    });
+    const live = container.querySelectorAll('.focus-entry--live');
+    expect(live.length).toBe(1);
+    expect(live[0].textContent).toContain('now');
+  });
+
+  it('marks no entry live once the session is done', () => {
+    const { container } = renderPanel({ sessionStatus: 'done', focusHistory: [entry()] });
+    expect(container.querySelectorAll('.focus-entry--live').length).toBe(0);
   });
 
   it('shows the thinking state when working with no summary yet', () => {

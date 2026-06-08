@@ -21,6 +21,7 @@ function renderPanel(props: Partial<React.ComponentProps<typeof ResearchPanel>> 
       results={[]}
       suggestedTopics={topics}
       primedTopics={[]}
+      warmingTopics={[]}
       activityStatus="ready"
       sessionId="s1"
       onOpenResearch={() => {}}
@@ -117,6 +118,35 @@ describe('ResearchPanel — primed (prefetched) dot', () => {
     const chip = screen.getByText('React useTransition').closest('button')!;
     fireEvent.click(chip); // fetch never resolves → stays pending
     expect(chip.querySelector('.research-chip__primed')).toBeNull();
+    expect(chip.querySelector('.research-chip__spinner')).toBeTruthy();
+  });
+});
+
+describe('ResearchPanel — warming (in-flight prefetch) ring', () => {
+  it('renders a warming ring (not the primed dot) on a chip being prefetched', () => {
+    const { container } = renderPanel({ warmingTopics: ['react usetransition'] });
+    const chip = screen.getByText('React useTransition').closest('button')!;
+    expect(chip.querySelector('.research-chip__warming')).toBeTruthy();
+    expect(chip.querySelector('.research-chip__primed')).toBeNull();
+    expect(chip.getAttribute('aria-label')).toBe('React useTransition — warming');
+    expect(container.querySelectorAll('.research-chip__warming').length).toBe(1);
+  });
+
+  it('primed wins over warming if a topic is somehow in both (ready beats in-flight)', () => {
+    renderPanel({
+      primedTopics: ['react usetransition'],
+      warmingTopics: ['react usetransition'],
+    });
+    const button = screen.getByText('React useTransition').closest('button')!;
+    expect(button.querySelector('.research-chip__primed')).toBeTruthy();
+    expect(button.querySelector('.research-chip__warming')).toBeNull();
+  });
+
+  it('a pending (tapped) chip shows the spinner, not the warming ring', () => {
+    renderPanel({ warmingTopics: ['react usetransition'] });
+    const chip = screen.getByText('React useTransition').closest('button')!;
+    fireEvent.click(chip); // fetch never resolves → stays pending
+    expect(chip.querySelector('.research-chip__warming')).toBeNull();
     expect(chip.querySelector('.research-chip__spinner')).toBeTruthy();
   });
 });

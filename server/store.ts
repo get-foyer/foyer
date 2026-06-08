@@ -115,6 +115,9 @@ export function normalizeSession(raw: unknown): Session | null {
     touchPoints: Array.isArray(s.touchPoints) ? s.touchPoints : base.touchPoints,
     research: Array.isArray(s.research) ? s.research : base.research,
     suggestedTopics: Array.isArray(s.suggestedTopics) ? s.suggestedTopics : base.suggestedTopics,
+    // Sessions persisted before pinning existed (or with a malformed value) load as unpinned.
+    // Guarding here keeps a non-number out of sortPinnedFirst, where `b - a` would yield NaN.
+    pinnedAt: typeof s.pinnedAt === 'number' ? s.pinnedAt : null,
   };
 
   if (merged.status === 'working' || merged.status === 'waiting') {

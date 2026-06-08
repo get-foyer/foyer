@@ -30,3 +30,4 @@ source of truth — read it for the "why" before changing a decision; supersede,
 - [0002 — Session persistence (JSON-file store)](docs/decisions/0002-session-persistence.md)
 - [0003 — Background research prefetch (warm the cache before the tap)](docs/decisions/0003-background-research-prefetch.md) · north star: [docs/research-prefetch.md](docs/research-prefetch.md)
 - [0004 — Conditional workflow graph (folded into Current Focus)](docs/decisions/0004-conditional-workflow-graph.md)
+- [0005 — Session pinning (server-owned `pinnedAt`, native Popover API menu)](docs/decisions/0005-session-pinning.md)

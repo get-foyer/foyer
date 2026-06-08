@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useLayoutEffect, useRef } from 'react';
 import { Markdown } from './Markdown';
 import { WorkflowGraph } from './WorkflowGraph';
 import type { Session, FocusEntry } from '../types';
 
 interface Props {
   summary: string | null;
-  /** Retained focus snapshots, newest-first. `focusHistory[0]` is the current focus; the rest
-   *  populate the collapsible "Previously" timeline. */
+  /** Retained focus snapshots, newest-first. Rendered as a chronological transcript
+   *  (oldest at the top, newest pinned at the bottom) in the Current Focus feed. */
   focusHistory: FocusEntry[];
   status: Session['activityStatus'];
   error: string | null;
@@ -20,9 +20,10 @@ interface Props {
 }
 
 /**
- * Groups consecutive newest-first entries by their turn, preserving order:
+ * Groups entries by their turn, preserving order. Fed the chronological (oldest-first)
+ * list, it returns turn groups oldest-first with items oldest-first:
  *
- *   [t3,t3,t2,t1]  ──►  [{turnSeq:3,[t3,t3]}, {turnSeq:2,[t2]}, {turnSeq:1,[t1]}]
+ *   [t1,t1,t2,t3]  ──►  [{turnSeq:1,[t1,t1]}, {turnSeq:2,[t2]}, {turnSeq:3,[t3]}]
  *
  * `turnSeq` is monotonic and stamped at capture, so grouping survives `prompts` pruning.
  */
@@ -38,12 +39,6 @@ function groupByTurn(
   return groups;
 }
 
-/** First non-empty line of a markdown summary, lightly de-marked, for the collapsed preview. */
-function firstLine(md: string): string {
-  const line = md.split('\n').find((l) => l.trim().length > 0) ?? '';
-  return line.replace(/^[#>\-*\s]+/, '').trim();
-}
-
 export function SummaryPanel({
   summary,
   focusHistory,
@@ -53,16 +48,15 @@ export function SummaryPanel({
   graph,
   showWorkflow,
 }: Props) {
-  // Prefer the latest retained entry; fall back to the raw `summary` (e.g. before the first
-  // entry is appended, or a no-append refresh that still updated the live text).
-  const current = focusHistory[0]?.summary ?? summary;
-  const previously = focusHistory.slice(1);
+  // Content exists once the agent has narrated at least once (a retained entry) or a live
+  // summary arrived before the first entry was appended (no-append refresh / pre-append tick).
+  const hasContent = focusHistory.length > 0 || summary !== null;
 
   return (
     <section className="panel summary-panel">
       <h2 className="panel__title">
         Current Focus
-        {status === 'generating' && current !== null && (
+        {status === 'generating' && hasContent && (
           <span className="panel__badge panel__badge--generating">Updating…</span>
         )}
       </h2>
@@ -85,10 +79,12 @@ export function SummaryPanel({
         </div>
       )}
 
-      {current !== null ? (
-        <div className="summary-panel__content">
-          <Markdown text={current} className="summary-panel__text" />
-        </div>
+      {hasContent ? (
+        <FocusFeed
+          focusHistory={focusHistory}
+          summary={summary}
+          working={sessionStatus === 'working'}
+        />
       ) : status === 'generating' ? (
         <div className="summary-panel__generating">
           <span className="spinner" />
@@ -112,78 +108,95 @@ export function SummaryPanel({
           <p>Waiting for the agent&apos;s first action…</p>
         </div>
       )}
-
-      {previously.length > 0 && <FocusHistory entries={previously} />}
     </section>
   );
 }
 
-/** Collapsible "Previously" timeline of older focus snapshots, grouped by turn. */
-function FocusHistory({ entries }: { entries: FocusEntry[] }) {
-  const [open, setOpen] = useState(false);
-  const groups = groupByTurn(entries);
+/**
+ * The continuous focus transcript: every retained snapshot for this session, oldest at the
+ * top and newest pinned at the bottom (chat / terminal-log expectation). The feed sticks to
+ * the bottom as new entries arrive, unless the user has scrolled up to read history — so an
+ * incoming summary never yanks them off what they're reading. Turn dividers appear once the
+ * history spans more than one turn.
+ */
+function FocusFeed({
+  focusHistory,
+  summary,
+  working,
+}: {
+  focusHistory: FocusEntry[];
+  summary: string | null;
+  working: boolean;
+}) {
+  const feedRef = useRef<HTMLDivElement>(null);
+  // Whether the feed is "stuck" to the bottom (follow-along). Starts true so the newest is in
+  // view on mount; flips to false when the user scrolls up, true again when they return.
+  const stickRef = useRef(true);
+
+  const newestId = focusHistory[0]?.id ?? null;
+
+  useLayoutEffect(() => {
+    const el = feedRef.current;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [newestId, focusHistory.length, summary]);
+
+  const handleScroll = () => {
+    const el = feedRef.current;
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  };
+
+  // Before the first retained entry (or a no-append refresh that only moved the live text),
+  // there is a summary but no FocusEntry to stamp — render it on its own, no timeline chrome.
+  if (focusHistory.length === 0) {
+    return (
+      <div className="summary-panel__content" ref={feedRef}>
+        <Markdown text={summary ?? ''} className="summary-panel__text" />
+      </div>
+    );
+  }
+
+  // Stored newest-first; reverse to read top-to-bottom as a chronological transcript.
+  const groups = groupByTurn([...focusHistory].reverse());
+  const showDividers = groups.length > 1;
 
   return (
-    <div className="summary-panel__history">
-      <button
-        className="summary-panel__history-toggle"
-        onClick={() => setOpen((v) => !v)}
-        type="button"
-        aria-expanded={open}
-      >
-        <span>Previously</span>
-        <span className="summary-panel__history-count">{entries.length}</span>
-        <span className="summary-panel__history-chevron" aria-hidden="true">
-          {open ? '▾' : '▸'}
-        </span>
-      </button>
-
-      {open && (
-        <div className="focus-timeline" aria-label="Earlier focus history">
-          {groups.map((g) => (
-            <div className="focus-group" key={g.turnSeq}>
-              <div className="focus-group__divider">
-                <span className="focus-group__turn">Turn {g.turnSeq}</span>
-                <span className="focus-group__prompt" title={g.turnPrompt}>
-                  {g.turnPrompt}
-                </span>
-              </div>
-              {g.items.map((entry) => (
-                <FocusCard key={entry.id} entry={entry} />
-              ))}
+    <div
+      className="summary-panel__content focus-feed"
+      ref={feedRef}
+      onScroll={handleScroll}
+      aria-label="Focus timeline"
+    >
+      {groups.map((g) => (
+        <div className="focus-group" key={g.turnSeq}>
+          {showDividers && (
+            <div className="focus-group__divider">
+              <span className="focus-group__turn">Turn {g.turnSeq}</span>
+              <span className="focus-group__prompt" title={g.turnPrompt}>
+                {g.turnPrompt}
+              </span>
             </div>
-          ))}
+          )}
+          {g.items.map((entry) => {
+            const live = working && entry.id === newestId;
+            const ts = new Date(entry.ts);
+            return (
+              <article
+                className={live ? 'focus-entry focus-entry--live' : 'focus-entry'}
+                key={entry.id}
+              >
+                <div className="focus-entry__meta">
+                  <time className="focus-entry__ts" dateTime={ts.toISOString()}>
+                    {ts.toLocaleTimeString()}
+                  </time>
+                  {live && <span className="focus-entry__live">LIVE</span>}
+                </div>
+                <Markdown text={entry.summary} className="focus-entry__summary" />
+              </article>
+            );
+          })}
         </div>
-      )}
+      ))}
     </div>
-  );
-}
-
-function FocusCard({ entry }: { entry: FocusEntry }) {
-  const [expanded, setExpanded] = useState(false);
-  const ts = new Date(entry.ts);
-
-  return (
-    <article className="focus-card">
-      <button
-        className="focus-card__header"
-        onClick={() => setExpanded((v) => !v)}
-        type="button"
-        aria-expanded={expanded}
-      >
-        <time className="focus-card__ts" dateTime={ts.toISOString()}>
-          {ts.toLocaleTimeString()}
-        </time>
-        {!expanded && <span className="focus-card__preview">{firstLine(entry.summary)}</span>}
-        <span className="focus-card__toggle" aria-hidden="true">
-          {expanded ? '▾' : '▸'}
-        </span>
-      </button>
-      {expanded && (
-        <div className="focus-card__body">
-          <Markdown text={entry.summary} className="focus-card__summary" />
-        </div>
-      )}
-    </article>
   );
 }

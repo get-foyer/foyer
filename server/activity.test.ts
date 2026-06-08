@@ -39,6 +39,8 @@ import {
   scheduleSummarize,
   summarizeNow,
   recordTranscriptPath,
+  runLiveSummaryPass,
+  startLiveSummaryPoll,
   _resetActivityForTest,
 } from './activity.js';
 import { getSession, setActivityGenerating, setActivity, setActivityError } from './state.js';
@@ -441,5 +443,114 @@ describe('error path', () => {
       sessionId: SESSION_ID,
       error: 'LLM timeout',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Live size-poll — server-side trigger for assistant-text-only turns.
+// Claude Code fires no hook when the agent emits text without a tool call, so
+// runLiveSummaryPass re-summarises any working session whose transcript grew.
+// ---------------------------------------------------------------------------
+
+describe('runLiveSummaryPass', () => {
+  it('summarises a working session whose transcript grew since the last summary', async () => {
+    const provider = makeProvider();
+    mockGetActiveProvider.mockReturnValue(
+      provider as unknown as ReturnType<typeof getActiveProvider>,
+    );
+    mockGetTranscriptSize.mockResolvedValue(500);
+    recordTranscriptPath(SESSION_ID, '/tmp/t.jsonl');
+
+    // Baseline: first summary pins lastSummarizedSize = 500.
+    summarizeNow(SESSION_ID);
+    await vi.runAllTimersAsync();
+    expect(provider.summarizeActivity).toHaveBeenCalledTimes(1);
+
+    // Transcript grows to 800 — the poll should re-summarise.
+    mockGetTranscriptSize.mockResolvedValue(800);
+    await runLiveSummaryPass();
+    await vi.runAllTimersAsync();
+    expect(provider.summarizeActivity).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips a session whose transcript has not grown', async () => {
+    const provider = makeProvider();
+    mockGetActiveProvider.mockReturnValue(
+      provider as unknown as ReturnType<typeof getActiveProvider>,
+    );
+    mockGetTranscriptSize.mockResolvedValue(500);
+    recordTranscriptPath(SESSION_ID, '/tmp/t.jsonl');
+
+    summarizeNow(SESSION_ID);
+    await vi.runAllTimersAsync();
+    expect(provider.summarizeActivity).toHaveBeenCalledTimes(1);
+
+    // Size unchanged — the growth pre-check short-circuits, no second LLM call.
+    await runLiveSummaryPass();
+    await vi.runAllTimersAsync();
+    expect(provider.summarizeActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips (no empty-context spam) when the transcript file does not exist yet', async () => {
+    const provider = makeProvider();
+    mockGetActiveProvider.mockReturnValue(
+      provider as unknown as ReturnType<typeof getActiveProvider>,
+    );
+    recordTranscriptPath(SESSION_ID, '/tmp/t.jsonl');
+    mockGetTranscriptSize.mockResolvedValue(null); // file absent → null
+
+    await runLiveSummaryPass();
+    await vi.runAllTimersAsync();
+    expect(provider.summarizeActivity).not.toHaveBeenCalled();
+  });
+
+  it('skips sessions that are not working', async () => {
+    const provider = makeProvider();
+    mockGetActiveProvider.mockReturnValue(
+      provider as unknown as ReturnType<typeof getActiveProvider>,
+    );
+    mockGetSession.mockReturnValue({
+      ...makeSession(),
+      status: 'done',
+    } as unknown as ReturnType<typeof getSession>);
+    mockGetTranscriptSize.mockResolvedValue(800);
+    recordTranscriptPath(SESSION_ID, '/tmp/t.jsonl');
+
+    await runLiveSummaryPass();
+    await vi.runAllTimersAsync();
+    expect(provider.summarizeActivity).not.toHaveBeenCalled();
+  });
+
+  it('skips sessions with no recorded transcript path (never stats them)', async () => {
+    const provider = makeProvider();
+    mockGetActiveProvider.mockReturnValue(
+      provider as unknown as ReturnType<typeof getActiveProvider>,
+    );
+    // Register the session in the scheduler WITHOUT a transcript path.
+    scheduleSummarize(SESSION_ID);
+    mockGetTranscriptSize.mockClear();
+
+    await runLiveSummaryPass();
+    // The shared generator filters path-less sessions out before any stat.
+    expect(mockGetTranscriptSize).not.toHaveBeenCalled();
+  });
+});
+
+describe('startLiveSummaryPoll', () => {
+  it('runs a summarisation pass every LIVE_POLL_MS (~5s)', async () => {
+    const provider = makeProvider();
+    mockGetActiveProvider.mockReturnValue(
+      provider as unknown as ReturnType<typeof getActiveProvider>,
+    );
+    mockGetTranscriptSize.mockResolvedValue(1000); // grew vs the null baseline
+    recordTranscriptPath(SESSION_ID, '/tmp/t.jsonl');
+
+    startLiveSummaryPoll();
+    // Interval has not elapsed yet — no pass.
+    expect(provider.summarizeActivity).not.toHaveBeenCalled();
+
+    // Advance one interval — exactly one pass fires and summarises.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(provider.summarizeActivity).toHaveBeenCalledTimes(1);
   });
 });

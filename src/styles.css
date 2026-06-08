@@ -268,7 +268,9 @@ body {
   outline-offset: -2px;
 }
 
-.session-tab--active {
+/* Active row — full-width highlight + left accent, lifted to the row (via :has) so the
+   highlight spans the close-button zone too. Mirrors the row-level :hover treatment. */
+.session-tab-row:has(.session-tab--active) {
   background: var(--surface-2);
   box-shadow: inset 2px 0 0 var(--accent);
 }
@@ -385,6 +387,152 @@ body {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
   opacity: 1;
+}
+
+/* Options (⋯) trigger — hover-revealed exactly like the × close button ("controls recede").
+   `anchor-name` is fed a unique value per row via the --sm-anchor custom property (set inline by
+   SessionMenu) so each row's popover anchors to its own trigger. */
+.session-tab__menu {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-dim); /* forward-maps to --dim on the Instrument swap */
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    color 0.15s;
+  border-radius: 0;
+  anchor-name: var(--sm-anchor);
+}
+
+.session-tab-row:hover .session-tab__menu {
+  opacity: 1;
+}
+
+/* Keep the trigger visible while its menu is open (the pointer leaves the row to reach the
+   top-layer popover, which would otherwise fade the hover-revealed trigger out). */
+.session-tab__menu--open {
+  opacity: 1;
+}
+
+.session-tab__menu:hover {
+  color: var(--text);
+}
+
+.session-tab__menu:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  opacity: 1;
+}
+
+/* Pinned marker — leading monochrome pushpin (see PinGlyph). --text-dim, distinct from the
+   active row's cyan bar; pairs with a visually-hidden "Pinned" label for screen readers. */
+.session-tab__pin-glyph {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-dim); /* forward-maps to --dim */
+}
+
+/* Register divider between the pinned group and the rest (rendered only when both groups exist). */
+.session-tab__pin-divider {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border); /* forward-maps to --border-2 */
+  flex-shrink: 0;
+}
+
+/* ⋯ menu — native Popover API (top layer escapes the sidebar/row overflow clip) positioned with
+   CSS anchor positioning. Falls back to the UA-centered popover position where anchoring isn't
+   supported; flips above the trigger near the viewport bottom (position-try: flip-block). */
+.session-menu {
+  /* Hidden until opened (and before the popover attribute is set in the mount effect, so there's
+     no flash of an un-anchored menu on first paint). */
+  display: none;
+  position: fixed;
+  margin: 0;
+  inset: auto;
+  position-anchor: var(--sm-anchor);
+  top: anchor(bottom);
+  right: anchor(right);
+  position-try: flip-block;
+  min-width: 140px;
+  padding: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transition:
+    opacity 0.14s ease-out,
+    display 0.14s ease-out allow-discrete,
+    overlay 0.14s ease-out allow-discrete;
+}
+
+.session-menu:popover-open {
+  display: flex;
+  flex-direction: column;
+  opacity: 1;
+}
+
+@starting-style {
+  .session-menu:popover-open {
+    opacity: 0;
+  }
+}
+
+.session-menu__item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 44px; /* touch target */
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.session-menu__item:hover {
+  background: var(--surface);
+}
+
+.session-menu__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-menu {
+    transition: none;
+  }
+}
+
+/* Screen-reader-only utility (no existing one in this stylesheet). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* -------------------------------------------------------------------------
@@ -1052,6 +1200,15 @@ body {
   flex-direction: column;
 }
 
+/* One scroll region for everything below the pinned title (subtitle + topic chips + ready-list),
+   so overflowing chips scroll instead of being clipped by the panel's overflow:hidden. Mirrors
+   .tp-list in the Live Files panel. */
+.research-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 /* Suggested research topics — clickable chips derived from the agent's work. */
 .research-topics {
   list-style: none;
@@ -1061,7 +1218,6 @@ body {
   gap: 6px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
 }
 
 .research-chip {
@@ -1130,6 +1286,24 @@ body {
   box-shadow: 0 0 4px color-mix(in srgb, var(--amber) 60%, transparent);
 }
 
+/* Warming: a speculative prefetch is in flight RIGHT NOW (not yet ready). A hollow amber RING
+ * that breathes (motion = "work happening", DESIGN.md's one signature) and visually fills into
+ * the solid primed dot when ready. Hollow-vs-solid keeps it distinct from primed WITHOUT relying
+ * on motion alone — so it still reads under prefers-reduced-motion. Same slot as primed/spinner
+ * (all mutually exclusive). Uses --amber to match the primed dot pending the --signal swap. */
+.research-chip__warming {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  width: 7px;
+  height: 7px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: transparent;
+  border: 1.5px solid var(--amber);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
 .research-panel__error {
   color: var(--red);
   font-size: 12px;
@@ -1137,11 +1311,9 @@ body {
 }
 
 /* Ready-list — compact index of completed briefings in the rail launcher. Tapping a row
-   opens the full-width Research tab on that briefing; full reading lives there, not here. */
+   opens the full-width Research tab on that briefing; full reading lives there, not here.
+   Scrolls with .research-panel__body (no separate scroll region). */
 .research-ready-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
   padding: 10px 14px;
 }
 
@@ -1767,6 +1939,11 @@ body {
     animation: none;
   }
   .view-tab__ready-dot {
+    animation: none;
+  }
+  /* Ring stays (hollow ≠ the solid primed dot), just stops breathing — status survives
+     without motion, per DESIGN.md "status never by colour/motion alone". */
+  .research-chip__warming {
     animation: none;
   }
 }

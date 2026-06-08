@@ -3,7 +3,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
 import { cfg } from './config.js';
-import { handleSseConnection, setPrimedTopicsProvider } from './sse.js';
+import { handleSseConnection, setPrimedTopicsProvider, setWarmingTopicsProvider } from './sse.js';
 import { handleHook } from './hooks.js';
 import { buildProvider, setActiveProvider } from './providers/index.js';
 import { getActiveProvider } from './providers/index.js';
@@ -17,7 +17,10 @@ import {
   initPersistence,
   hydrateSessions,
   closeSession,
+  pinSession,
+  unpinSession,
   setSessionEndListener,
+  setSessionDropListener,
   flushAll,
 } from './state.js';
 import {
@@ -25,9 +28,15 @@ import {
   schedulePrefetch,
   clearPrefetch,
   getPrimedTopics,
+  getWarmingTopics,
 } from './prefetch.js';
 import { createJsonStore } from './store.js';
-import { summarizeNow, startStaleSessionWatcher } from './activity.js';
+import {
+  summarizeNow,
+  startStaleSessionWatcher,
+  startLiveSummaryPoll,
+  forgetActivitySession,
+} from './activity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -119,6 +128,32 @@ app.post('/activity', (req, res) => {
   res.status(202).json({});
 });
 
+// Prefetch-only warm trigger — the WARMING half of /activity, WITHOUT summarising. The client
+// fires this when it lands on a session that's paused (`waiting`) or finished (`done`): the
+// agent isn't producing new activity to summarise, but the user is now most likely to read, so
+// we warm the chips already on screen. Decoupled from /activity on purpose — re-running the
+// summariser on idle sessions would burn provider calls (its skip-if-unchanged guard doesn't
+// cover sessions with no transcript path). Warming itself is idempotent + back-off-guarded.
+app.post('/prefetch', (req, res) => {
+  const { sessionId } = req.body as { sessionId?: string };
+  if (!sessionId?.trim()) {
+    res.status(400).json({ error: 'sessionId is required' });
+    return;
+  }
+
+  const provider = getActiveProvider();
+  if (!provider) {
+    res.status(503).json({
+      error: 'No LLM provider configured. Run `npm run setup` to set one up.',
+    });
+    return;
+  }
+
+  const s = getSession(sessionId.trim());
+  if (s) schedulePrefetch(s.sessionId, s.suggestedTopics);
+  res.status(202).json({});
+});
+
 // Close a session — persists a `closed` flag so the tab stays dismissed across restarts
 // (data is kept on disk, not deleted). Returns 200 even for unknown ids (idempotent).
 app.post('/close', (req, res) => {
@@ -129,6 +164,21 @@ app.post('/close', (req, res) => {
   }
   closeSession(sessionId.trim());
   clearPrefetch(sessionId.trim()); // drop any warmed/queued research for the dismissed tab
+  res.status(200).json({});
+});
+
+// Pin / unpin a session — persists a `pinnedAt` timestamp so the tab stays at the top of the
+// sidebar across reloads/restarts (mirrors /close: write-through, idempotent 200 for unknown
+// ids, no broadcast — the client updates optimistically and the next snapshot reconciles).
+app.post('/pin', (req, res) => {
+  const { sessionId, pinned } = req.body as { sessionId?: string; pinned?: boolean };
+  if (!sessionId?.trim()) {
+    res.status(400).json({ error: 'sessionId is required' });
+    return;
+  }
+  const id = sessionId.trim();
+  if (pinned) pinSession(id);
+  else unpinSession(id);
   res.status(200).json({});
 });
 
@@ -180,10 +230,18 @@ async function boot() {
   // Let the SSE layer replay primed-research dots on (re)connect without importing prefetch.ts
   // (avoids an sse↔prefetch cycle — prefetch already imports broadcast from sse).
   setPrimedTopicsProvider(getPrimedTopics);
+  setWarmingTopicsProvider(getWarmingTopics);
 
   // Free a session's prefetch cache when it ends (done/stale/turn-end), mirroring the /close
   // path. Injected so state.ts stays free of a prefetch import (one-way: prefetch → state).
   setSessionEndListener(clearPrefetch);
+  // When retention removes a session from the live in-memory window, also clear longer-lived
+  // scheduler/watch metadata. Normal finish keeps activity metadata long enough for the final
+  // summarizeNow() call in hooks.ts.
+  setSessionDropListener((sessionId) => {
+    clearPrefetch(sessionId);
+    forgetActivitySession(sessionId);
+  });
 
   // Persistence: install the JSON store and hydrate prior sessions before serving, so the
   // first SSE snapshot already carries them. createJsonStore falls back to in-memory only
@@ -234,6 +292,10 @@ async function boot() {
 
   // Auto-close sessions whose transcript goes quiet (handles Ctrl-C / hard kill)
   startStaleSessionWatcher();
+
+  // Live summarisation: re-summarise any working session whose transcript grew (catches
+  // assistant-text-only turns, which fire no tool hook — see activity.ts trigger #4).
+  startLiveSummaryPoll();
 
   // Friendly error for the most common boot failure
   server.on('error', (err: NodeJS.ErrnoException) => {

@@ -5,9 +5,9 @@ import type {
   SuggestedTopic,
   FocusEntry,
 } from '../src/types.js';
-import { newSession, MAX_FOCUS } from '../src/types.js';
+import { newSession, MAX_FOCUS, sortPinnedFirst } from '../src/types.js';
 import { normalizeWhitespace } from './providers/text.js';
-import { createNoopStore, type SessionStore } from './store.js';
+import { createNoopStore, DONE_TTL_MS, MAX_SESSIONS, type SessionStore } from './store.js';
 
 export type { Session };
 
@@ -159,10 +159,57 @@ export function getSession(id: string): Session | null {
   return sessions.get(id) ?? null;
 }
 
-/** Returns all visible sessions in insertion (start) order — working/done/interrupted.
- *  Closed sessions are filtered out (they stay on disk + in the Map but are hidden from the UI). */
+/** Returns all visible sessions — working/done/interrupted — pinned first (most-recently-pinned
+ *  first), then unpinned in insertion (start) order. Closed sessions are filtered out (they stay
+ *  on disk + in the Map but are hidden from the UI). The Map yields insertion order, which
+ *  sortPinnedFirst preserves as the unpinned tiebreak. */
 export function getAllSessions(): Session[] {
-  return [...sessions.values()].filter((s) => !s.closed);
+  return sortPinnedFirst([...sessions.values()].filter((s) => !s.closed));
+}
+
+function pruneLiveSessions(now: number = Date.now()): void {
+  const candidates = [...sessions.values()];
+  if (candidates.length <= MAX_SESSIONS) {
+    for (const s of candidates) {
+      const terminal = s.status === 'done' || s.status === 'interrupted';
+      if (terminal && now - (s.finishedAt ?? s.startedAt) > DONE_TTL_MS) {
+        dropSessionFromMemory(s.sessionId);
+      }
+    }
+    return;
+  }
+
+  const eligible = candidates.filter((s) => {
+    const terminal = s.status === 'done' || s.status === 'interrupted';
+    return !terminal || now - (s.finishedAt ?? s.startedAt) <= DONE_TTL_MS;
+  });
+  const keep = new Set<string>();
+
+  for (const s of eligible) {
+    const live = s.status === 'working' || s.status === 'waiting';
+    const activeVisible = !s.closed && s.sessionId === activeSessionId;
+    if (live || activeVisible) keep.add(s.sessionId);
+  }
+  for (const s of [...eligible].sort((a, b) => b.startedAt - a.startedAt)) {
+    if (keep.size >= MAX_SESSIONS) break;
+    keep.add(s.sessionId);
+  }
+
+  for (const s of candidates) {
+    if (!keep.has(s.sessionId)) dropSessionFromMemory(s.sessionId);
+  }
+}
+
+function dropSessionFromMemory(sessionId: string): void {
+  sessions.delete(sessionId);
+  dirty.delete(sessionId);
+  inFlightResearch.delete(sessionId);
+  plannedTurn.delete(sessionId);
+  sessionDropListener?.(sessionId);
+  if (activeSessionId === sessionId) {
+    const visible = [...sessions.values()].filter((s) => !s.closed);
+    activeSessionId = visible.length > 0 ? visible[visible.length - 1].sessionId : null;
+  }
 }
 
 /**
@@ -186,6 +233,8 @@ export function _resetStateForTest(): void {
     flushTimer = null;
   }
   store = createNoopStore();
+  sessionEndListener = null;
+  sessionDropListener = null;
 }
 
 /** Max prompts retained per session. Beyond this, the goal (prompts[0]) and the most
@@ -235,12 +284,14 @@ export function startSession(
       flushNow(sessionId); // lifecycle transition — persist immediately
     }
     markDirty(sessionId);
+    pruneLiveSessions();
     return { session: existing, continued: true };
   }
   const session = newSession(sessionId, prompt, Date.now());
   sessions.set(sessionId, session);
   activeSessionId = sessionId;
   markDirty(sessionId);
+  pruneLiveSessions();
   return { session, continued: false };
 }
 
@@ -385,6 +436,13 @@ export function setSessionEndListener(cb: ((sessionId: string) => void) | null):
   sessionEndListener = cb;
 }
 
+/** Invoked when a session is removed from the live in-memory window, so side modules with
+ * long-lived per-session metadata can forget it too. */
+let sessionDropListener: ((sessionId: string) => void) | null = null;
+export function setSessionDropListener(cb: ((sessionId: string) => void) | null): void {
+  sessionDropListener = cb;
+}
+
 export function finishSession(sessionId: string): boolean {
   const s = sessions.get(sessionId);
   if (!s) return false;
@@ -397,6 +455,7 @@ export function finishSession(sessionId: string): boolean {
   // on explicit /close, so done/stale/turn-end sessions leaked warmed entries for the life of
   // the daemon. A reopen (new prompt) re-warms via the /activity poll.
   sessionEndListener?.(sessionId);
+  pruneLiveSessions();
   return true;
 }
 
@@ -407,6 +466,26 @@ export function closeSession(sessionId: string): boolean {
   if (!s) return false;
   s.closed = true;
   plannedTurn.delete(sessionId); // ephemeral marker — drop when the tab is dismissed
+  flushNow(sessionId);
+  return true;
+}
+
+/** Pin a session to the top of the sidebar (stamps pinnedAt = now). Sort is most-recent-pin-first,
+ *  so re-pinning lifts a session above earlier pins. Lifecycle-ish state → flush immediately,
+ *  mirroring closeSession. Returns false for unknown ids (idempotent caller side). */
+export function pinSession(sessionId: string): boolean {
+  const s = sessions.get(sessionId);
+  if (!s) return false;
+  s.pinnedAt = Date.now();
+  flushNow(sessionId);
+  return true;
+}
+
+/** Unpin a session (clears pinnedAt → falls back to insertion order among unpinned). */
+export function unpinSession(sessionId: string): boolean {
+  const s = sessions.get(sessionId);
+  if (!s) return false;
+  s.pinnedAt = null;
   flushNow(sessionId);
   return true;
 }

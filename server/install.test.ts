@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { installHooks, uninstallHooks, installCodexHooks, uninstallCodexHooks } from './install.js';
+import {
+  installHooks,
+  uninstallHooks,
+  installCodexHooks,
+  uninstallCodexHooks,
+  codexHookCommand,
+} from './install.js';
 
 let tempDir: string;
 let settingsPath: string;
@@ -150,6 +156,17 @@ const SHIM_PATH = '/abs/path/server/codex-hook.mjs';
 const PORT = 4317;
 
 describe('installCodexHooks', () => {
+  it('quotes shim path and args in the installed command', () => {
+    const command = codexHookCommand(
+      "/Users/dennis/Foyer's App/server/codex-hook.mjs",
+      4317,
+      'Stop',
+    );
+    expect(command).toBe(
+      "node '/Users/dennis/Foyer'\\''s App/server/codex-hook.mjs' '4317' 'Stop'",
+    );
+  });
+
   it('creates a TOML file with features.hooks = true and hook entries', async () => {
     await installCodexHooks(codexConfigPath, SHIM_PATH, PORT);
     const raw = await readFile(codexConfigPath, 'utf-8');
