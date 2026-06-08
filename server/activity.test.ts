@@ -17,8 +17,6 @@ vi.mock('./state.js', () => ({
   setActivityGenerating: vi.fn(),
   setActivity: vi.fn(),
   setActivityError: vi.fn(),
-  // run() reads this to set ctx.planned (the hybrid workflow floor). Default: not planned.
-  isPlannedTurn: vi.fn(() => false),
 }));
 
 vi.mock('./sse.js', () => ({
@@ -64,9 +62,9 @@ const mockGetTranscriptSize = vi.mocked(getTranscriptSize);
 
 const SESSION_ID = 'test-session-1';
 
-function makeProvider(summary = 'Agent working on auth.', graph = 'graph TD\n  A-->B') {
+function makeProvider(summary = 'Agent working on auth.') {
   return {
-    summarizeActivity: vi.fn().mockResolvedValue({ summary, graph, topics: [] }),
+    summarizeActivity: vi.fn().mockResolvedValue({ summary, topics: [] }),
   };
 }
 
@@ -78,7 +76,6 @@ function makeSession() {
     prompt: 'Build the auth module',
     prompts: ['Build the auth module'],
     turnSeq: 1,
-    graph: 'graph LR\n  G(["Build auth module"]):::goal',
     touchPoints: [],
     focusHistory: [],
     suggestedTopics: [],
@@ -245,15 +242,13 @@ describe('skip-if-unchanged', () => {
 
 describe('single-flight', () => {
   it('does not start a second run while one is in-flight', async () => {
-    let resolveFirst!: (v: { summary: string; graph: string }) => void;
-    const firstCallPromise = new Promise<{ summary: string; graph: string }>(
-      (res) => (resolveFirst = res),
-    );
+    let resolveFirst!: (v: { summary: string }) => void;
+    const firstCallPromise = new Promise<{ summary: string }>((res) => (resolveFirst = res));
     const provider = {
       summarizeActivity: vi
         .fn()
         .mockReturnValueOnce(firstCallPromise) // first call blocks
-        .mockResolvedValueOnce({ summary: 'Second.', graph: 'graph TD\n  B-->C' }),
+        .mockResolvedValueOnce({ summary: 'Second.' }),
     };
     mockGetActiveProvider.mockReturnValue(
       provider as unknown as ReturnType<typeof getActiveProvider>,
@@ -276,7 +271,7 @@ describe('single-flight', () => {
     expect(provider.summarizeActivity).toHaveBeenCalledTimes(1);
 
     // Resolve the first call; the queued rerun should fire
-    resolveFirst({ summary: 'First.', graph: 'graph TD\n  A-->B' });
+    resolveFirst({ summary: 'First.' });
     await vi.runAllTimersAsync();
 
     expect(provider.summarizeActivity).toHaveBeenCalledTimes(2);
@@ -288,7 +283,7 @@ describe('single-flight', () => {
 // ---------------------------------------------------------------------------
 
 describe('activity context', () => {
-  it('feeds previousGraph, status and waitingReason to the provider (append-only)', async () => {
+  it('feeds previousTopics, status and waitingReason to the provider', async () => {
     const provider = makeProvider();
     mockGetActiveProvider.mockReturnValue(
       provider as unknown as ReturnType<typeof getActiveProvider>,
@@ -300,14 +295,11 @@ describe('activity context', () => {
 
     expect(provider.summarizeActivity).toHaveBeenCalledTimes(1);
     const ctx = provider.summarizeActivity.mock.calls[0][0] as {
-      previousGraph: string | null;
       previousTopics: { topic: string; reason: string }[];
       status: string;
       waitingReason: string | null;
     };
-    // The prior storyline is threaded back so the model extends it, not redraws.
-    expect(ctx.previousGraph).toBe('graph LR\n  G(["Build auth module"]):::goal');
-    // Prior topics are threaded back for the same anti-churn reason.
+    // Prior topics are threaded back for anti-churn (stable chips).
     expect(ctx.previousTopics).toEqual([]);
     expect(ctx.status).toBe('working');
     expect(ctx.waitingReason).toBeNull();
@@ -327,7 +319,6 @@ describe('suggested topics broadcast', () => {
       // Provider proposes a topic that is (pretend) in flight...
       summarizeActivity: vi.fn().mockResolvedValue({
         summary: 'S',
-        graph: 'graph TD\n  A',
         topics: [{ topic: 'In flight topic', reason: 'raw' }],
       }),
     };

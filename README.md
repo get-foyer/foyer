@@ -1,8 +1,8 @@
-# Foyer Gate 🚪
+# Foyer Lobby
 
 > Turn the 3–5 minute "agent is working" wait into focused, in-context time.
 
-When you prompt a Claude Code agent, Foyer Gate hooks into the session and renders a live dashboard: a narrated "current focus" (with a workflow graph folded in when the work is multi-phase), the files being touched in real time, and a deep-research panel for learning while you wait.
+When you prompt a Claude Code agent, Foyer Lobby hooks into the session and renders a live dashboard: a narrated "current focus", the files being touched in real time, and a deep-research panel for learning while you wait.
 
 **Core UX principle:** every panel gives you something to think about _in the same mental space as the current task_ — not just a progress bar.
 
@@ -14,7 +14,6 @@ When you prompt a Claude Code agent, Foyer Gate hooks into the session and rende
 
 - **Live touch points** — every file Write/Edit/MultiEdit streams as it happens
 - **Plan capture** — the approved plan auto-populates when you exit plan mode (rendered as formatted markdown)
-- **Workflow graph** — a mermaid storyline of the session, generated automatically and folded into Current Focus — shown only when the work is genuinely multi-phase (or you went through plan mode), so trivial tasks stay clutter-free
 - **Deep research** — enter any topic during the wait and get a sourced briefing
 - **Connection status** — a Live / Reconnecting / Disconnected badge so you always know if the dashboard is connected
 - **Active provider chip** — shows which LLM backend is in use; banner when none is configured
@@ -36,8 +35,8 @@ When you prompt a Claude Code agent, Foyer Gate hooks into the session and rende
 ## Quick start
 
 ```bash
-git clone https://github.com/get-foyer/foyer-gate
-cd foyer-gate
+git clone https://github.com/getfoyer/lobby
+cd lobby
 pnpm install
 pnpm setup      # interactive wizard: pick backend, install hooks
 pnpm build
@@ -60,15 +59,15 @@ The setup wizard auto-detects what's available and asks which to use.
 
 **†** From 2026-06-15, Claude subscription headless usage (via `claude -p`) draws from a separate monthly "Agent SDK credit" pool, distinct from your interactive limits. The setup wizard warns you before choosing this option.
 
-**⚠ ToS note:** Using the Codex or Claude CLI to automate calls from a local server is in a gray area of each provider's terms of service. Foyer Gate is intended for personal, local developer use only. For production or team use, use the Anthropic API (BYOK).
+**⚠ ToS note:** Using the Codex or Claude CLI to automate calls from a local server is in a gray area of each provider's terms of service. Foyer Lobby is intended for personal, local developer use only. For production or team use, use the Anthropic API (BYOK).
 
 ---
 
 ## Local security model
 
-Foyer Gate is designed to run on your own machine, for your own agent sessions. The Express server binds to `127.0.0.1` only, and the installed hooks call `http://localhost:<port>/hook`.
+Foyer Lobby is designed to run on your own machine, for your own agent sessions. The Express server binds to `127.0.0.1` only, and the installed hooks call `http://localhost:<port>/hook`.
 
-The local API routes are not authenticated. That is intentional for a localhost developer tool, but it means any process running as your user can talk to the dashboard while it is open. Do not expose the Foyer Gate port with a reverse proxy, tunnel, public bind address, or shared network listener. If you change the server to listen on anything other than loopback, add authentication and firewall rules first.
+The local API routes are not authenticated. That is intentional for a localhost developer tool, but it means any process running as your user can talk to the dashboard while it is open. Do not expose the Foyer Lobby port with a reverse proxy, tunnel, public bind address, or shared network listener. If you change the server to listen on anything other than loopback, add authentication and firewall rules first.
 
 `.env` is ignored by git and may contain provider credentials when you use the Anthropic API backend.
 
@@ -115,7 +114,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for architecture details and conventions.
 ## Uninstall
 
 ```bash
-pnpm uninstall  # strips only Foyer Gate hooks; all other hooks are preserved
+pnpm uninstall  # strips only Foyer Lobby hooks; all other hooks are preserved
 ```
 
 ---

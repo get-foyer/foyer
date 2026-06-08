@@ -18,37 +18,21 @@ Deferred work, captured with enough context to pick up cold.
   in favor of pure hard-hold for v1). ~½ day human / ~1h CC.
 - **Depends on / blocked by:** The "Follow the live channel" feature (shipped in this PR).
 
-## Watch: hidden trivial turns extending the workflow storyline
-
-- **What:** When a turn is trivial (workflow hidden), the summarizer still gets `previousGraph`
-  fed back and _could_ append a low-value phase node, so a later multi-phase turn shows a slightly
-  noisy storyline. Watch for this in dogfooding; if it appears, gate graph-extension on
-  `showWorkflow` (don't feed `previousGraph` / don't accept new nodes on a hidden turn).
-- **Why:** Keeps the storyline a clean glanceable fingerprint. Deferred because the prompt already
-  forbids tool-call nodes and returns null for trivial work, and the 6-node cap bounds any noise —
-  so the real-world risk is low and a guard now would be premature.
-- **Pros:** Removes a possible source of storyline clutter at its root.
-- **Cons:** Extra branching + tests in the hot summarize path for a problem that may never occur.
-- **Context:** From ADR 0004 (conditional workflow graph). The decision logic lives in
-  `setActivity` (`server/state.ts`) and the prompt in `buildActivityPrompt` (`server/providers/codex.ts`).
-  Trigger to act: storyline shows nodes that don't correspond to substantive phases. ~1h human / ~15m CC.
-- **Depends on / blocked by:** ADR 0004 (shipped in this PR). Needs dogfooding evidence first.
-
 ## Codex research-tier: give research its own reasoning effort
 
 - **What:** Split the codex provider's single `FAST_FLAGS` so `research()` uses its own
   `RESEARCH_FLAGS` (`model_reasoning_effort=medium`, env-overridable via `FOYER_CODEX_RESEARCH_EFFORT`),
-  instead of sharing the low-effort tier with the high-frequency `generateGraph`/`summarizeActivity`
-  calls. Mirrors the Claude side, where research is pinned to Sonnet while summary/graph stay on Haiku.
+  instead of sharing the low-effort tier with the high-frequency `summarizeActivity` call.
+  Mirrors the Claude side, where research is pinned to Sonnet while the summariser stays on Haiku.
 - **Why:** Research is low-frequency, user-initiated, and its briefing is the thing the user actually
   reads — synthesis quality matters more than for the trivial hot-path calls. Codex research currently
   runs at `low` effort (same as the trivial calls), so the briefing quality is capped.
 - **Pros:** Better codex briefings; full symmetry with the Claude provider's per-call-type tiering.
 - **Cons:** Higher cost/latency per codex research call; the quality gain is unvalidated (codex research
   already works, this is polish, not a bug fix).
-- **Context:** `FAST_FLAGS` is at `server/providers/codex.ts:47`; all three calls (`generateGraph`,
-  `summarizeActivity`, `research`) currently spread it. Only `research()` (`codex.ts:121-135`) should
-  switch to `RESEARCH_FLAGS`. The Claude analog shipped in the `claudeCli.ts` research-timeout fix
+- **Context:** `FAST_FLAGS` is at `server/providers/codex.ts:47`; both calls (`summarizeActivity`,
+  `research`) currently spread it. Only `research()` should switch to `RESEARCH_FLAGS`. The Claude
+  analog shipped in the `claudeCli.ts` research-timeout fix
   (`RESEARCH_MODEL` + `FOYER_CLAUDE_CLI_RESEARCH_MODEL`). ~15m human / ~5m CC.
 - **Depends on / blocked by:** None. Independent polish.
 
@@ -109,7 +93,7 @@ Deferred work, captured with enough context to pick up cold.
   button. Both are hover-revealed (`opacity:0` until `.session-tab-row:hover`), so on a tablet /
   touch laptop with no hover they can't be reached — which means pinning and closing are
   unreachable on touch.
-- **Why:** Pinning (ADR 0005) and closing are useful actions that are simply unavailable without a
+- **Why:** Pinning (ADR 0004) and closing are useful actions that are simply unavailable without a
   mouse. The hover-reveal keeps rows calm per DESIGN.md ("controls recede"), the right default for
   the terminal-native, mouse-driven user, but it shouldn't be the _only_ path.
 - **Pros:** Pin/close work on touch; no silent dead-ends on tablets.
@@ -120,7 +104,7 @@ Deferred work, captured with enough context to pick up cold.
   matters: keep the controls visible under `@media (pointer: coarse)`, or add a long-press
   affordance. From plan-eng-review D3 (deferred in favour of the mouse-driven happy path). ~2h
   human / ~25m CC.
-- **Depends on / blocked by:** Session pinning (shipped, ADR 0005). Needs evidence the dashboard is
+- **Depends on / blocked by:** Session pinning (shipped, ADR 0004). Needs evidence the dashboard is
   actually used on touch devices before it's worth the chrome.
 
 ## Cover the reconnect-replay + menu-open paths CI can't reach
@@ -147,11 +131,11 @@ Deferred work, captured with enough context to pick up cold.
   which silently no-ops where the Popover API is absent — leaving the ⋯ menu (pin/unpin) unopenable.
   Add a feature-detect (`'popover' in HTMLElement.prototype`) with a JS-toggled `.session-menu`
   display + manual outside-click/Escape fallback.
-- **Why:** ADR 0005 deliberately bet on Baseline-2026 Popover support, which is correct for the
+- **Why:** ADR 0004 deliberately bet on Baseline-2026 Popover support, which is correct for the
   terminal-native user on a current browser — but a hard no-op is a silent dead-end on anything older.
 - **Pros:** Pin/unpin never silently dead; keeps the native path for the common case.
 - **Cons:** Re-implements light-dismiss/focus-return that the platform gives for free; likely
   over-building unless an unsupported browser actually shows up. Revisit only if it does.
 - **Context:** From the pinning review (frontend specialist). `src/components/SessionMenu.tsx:39-79`.
   ~2h human / ~25m CC.
-- **Depends on / blocked by:** Session pinning (shipped, ADR 0005).
+- **Depends on / blocked by:** Session pinning (shipped, ADR 0004).

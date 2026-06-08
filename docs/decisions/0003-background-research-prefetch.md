@@ -138,3 +138,25 @@ Added files/changes: `server/prefetch.ts` (`research_warming` broadcasts, `getWa
 `server/sse.ts` (warming replay), `server/index.ts` (wire `setWarmingTopicsProvider`),
 `src/types.ts` (`SseType`), `src/App.tsx` (`warmingTopics` reducer state),
 `src/components/ResearchPanel.tsx`, `src/styles.css` (`.research-chip__warming`).
+
+## Addendum (2026-06-08): one unified list + server-owned read state
+
+The rail had two stacked regions — suggested-topic chips and a separate "Ready to read" block of
+completed briefings. They are now **one list** in a single section (no second header), ordered
+unread-ready → suggested → read; row state, not a label, carries the "it's ready to read" message.
+
+This also fixed a signal leak: the old ready-list kept its amber dot on a briefing forever, even
+after it was read, eroding "amber = rare live/ready signal" (§5, "honest primed signal"). To make
+"ready to read" honest we added server-owned read state: `ResearchResult.readAt` (mirroring
+`pinnedAt` / ADR 0004 — optimistic client dispatch + write-through `POST /research/read` +
+`flushNow` + reconcile on next snapshot, no SSE). An unread briefing shows a solid amber dot at full
+strength; once opened it dims (`--text-dim`) with a **hollow dim ring (no amber)** and sinks to the
+bottom — distinct by shape AND colour, reusing the warming/primed shape language so it never relies
+on colour alone. "Read" is defined as "shown in the Research tab", marked by one client effect that
+covers rail taps, the primed instant-reveal, and tab switches uniformly.
+
+Added/changed: `src/types.ts` (`ResearchResult.readAt`), `server/state.ts` (`markResearchRead`,
+`flushNow`), `server/index.ts` (`POST /research/read`), `src/App.tsx` (`mark_research_read` action,
+`postKeepalive` helper, `persistResearchRead`, mark-read effect),
+`src/components/ResearchPanel.tsx` (unified list), `src/styles.css` (`.research-list`,
+`.research-ready-row--read`).

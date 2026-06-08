@@ -20,7 +20,7 @@
  */
 import { watch } from 'fs';
 import type { FSWatcher } from 'fs';
-import { getSession, finishSession, isPlannedTurn } from './state.js';
+import { getSession, finishSession } from './state.js';
 import { setActivityGenerating, setActivity, setActivityError } from './state.js';
 import { broadcast } from './sse.js';
 import {
@@ -409,20 +409,14 @@ async function run(sessionId: string): Promise<void> {
       prompts: session.prompts,
       recentTouchPoints: session.touchPoints.slice(0, 10),
       transcriptTail,
-      // Feed the prior storyline back so the model extends it append-only,
-      // keeping the session's silhouette stable across ticks.
-      previousGraph: session.graph,
-      // Feed prior topics back for the same anti-churn reason — stable chips.
+      // Feed prior topics back for anti-churn — stable chips.
       previousTopics: session.suggestedTopics,
       status: session.status,
       waitingReason: session.waitingReason,
-      // Hybrid workflow-visibility floor: if the agent exited plan mode on THIS turn, the
-      // prompt is told to always draw a graph (a planned task is inherently multi-phase).
-      planned: isPlannedTurn(sessionId, turnSeq),
     };
 
     // `topics` defaults to [] defensively — a provider that returns nothing must not crash.
-    const { summary, graph, topics = [] } = await provider.summarizeActivity(ctx);
+    const { summary, topics = [] } = await provider.summarizeActivity(ctx);
 
     // setActivity filters topics against already-researched + in-flight before storing,
     // so broadcast the stored (filtered) list, not the raw model output. It also returns
@@ -430,7 +424,6 @@ async function run(sessionId: string): Promise<void> {
     // the same entry the server stored (de-dup logic lives ONLY on the server).
     const entry = setActivity(sessionId, {
       summary,
-      graph,
       topics,
       turnSeq,
       turnPrompt,
@@ -438,15 +431,9 @@ async function run(sessionId: string): Promise<void> {
     });
     const stored = getSession(sessionId);
     const suggestedTopics = stored?.suggestedTopics ?? [];
-    // Broadcast the STORED graph + visibility marker, not the raw model output: setActivity
-    // may keep the previous storyline when the model returned null (content is monotonic), and
-    // workflowTurnSeq drives whether the client folds the graph into Current Focus.
-    const storedGraph = stored?.graph ?? null;
     broadcast('activity', {
       sessionId,
       summary,
-      graph: storedGraph,
-      workflowTurnSeq: stored?.workflowTurnSeq ?? null,
       topics: suggestedTopics,
       entry,
     });
@@ -454,7 +441,7 @@ async function run(sessionId: string): Promise<void> {
       m.lastSummarizedSize = currentSize;
     }
     console.log(
-      `[activity] Summarised ${sessionId} (${summary.length} chars, ${storedGraph?.length ?? 0} chars graph, ${suggestedTopics.length} topics)`,
+      `[activity] Summarised ${sessionId} (${summary.length} chars, ${suggestedTopics.length} topics)`,
     );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -1,4 +1,4 @@
-# 5. Session pinning (server-owned, pinned-first ordering)
+# 4. Session pinning (server-owned, pinned-first ordering)
 
 Date: 2026-06-08
 Status: Accepted

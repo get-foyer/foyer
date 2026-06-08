@@ -3,13 +3,12 @@ import mermaid from 'mermaid';
 import DOMPurify from 'dompurify';
 
 /**
- * Shared Mermaid rendering for the whole app. Two surfaces use it:
- *  - WorkflowGraph (TRUSTED): our own `graph LR` storyline, the global dark/blue theme.
- *  - MermaidFigure (UNTRUSTED): an LLM-authored research diagram, guarded + re-themed amber.
+ * Mermaid rendering for research briefing diagrams (UNTRUSTED, LLM-authored): the diagram is
+ * guarded (size + type allowlist, init-directive stripped) and re-themed amber before render.
  *
- * Only the low-level render+sanitize core is shared (MermaidView); the trusted vs untrusted
- * concerns stay in their own thin wrappers so research's guards never run on the stable graph.
- * The DOMPurify opts + htmlLabels:false are security-critical and locked by graphSanitize.test.ts.
+ * The low-level render+sanitize core is split out as MermaidView so the guard logic stays in
+ * MermaidFigure's wrapper. The DOMPurify opts + htmlLabels:false are security-critical and
+ * locked by graphSanitize.test.ts.
  */
 
 let mermaidInitialized = false;
@@ -109,9 +108,9 @@ export function MermaidView({ source, svgClassName }: { source: string; svgClass
 const ALLOWED_TYPES = /^(flowchart\b|graph\b|sequenceDiagram\b|stateDiagram(?:-v2)?\b)/;
 /** Parse-time DoS guard: an LLM diagram beyond this is dropped, not rendered. */
 const MAX_LEN = 4000;
-// Re-theme research diagrams amber to distinguish them from the blue workflow graph. Uses the
-// live --amber (#d29922), matching the current palette — it migrates to the Instrument --signal
-// (#ffb020) with the rest of the app, per DESIGN.md.
+// Theme research diagrams amber to match the dashboard's signal palette. Uses the live --amber
+// (#d29922), matching the current palette — it migrates to the Instrument --signal (#ffb020)
+// with the rest of the app, per DESIGN.md.
 const AMBER_INIT =
   '%%{init: {"theme":"base","themeVariables":{"primaryColor":"#212830","primaryTextColor":"#f0f6fc","primaryBorderColor":"#d29922","nodeBorder":"#d29922","lineColor":"#d29922","secondaryColor":"#212830","tertiaryColor":"#2d333b","fontFamily":"ui-monospace, SFMono-Regular, monospace"},"flowchart":{"htmlLabels":false}}}%%\n';
 

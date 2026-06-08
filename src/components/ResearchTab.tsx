@@ -117,7 +117,7 @@ export function ResearchTab({ results, selectedTs, onSelect }: Props) {
           <time className="research-tab__reading-ts">{new Date(selected.ts).toLocaleString()}</time>
         </header>
 
-        {selected.lede && <p className="research-tab__lede">{selected.lede}</p>}
+        {selected.lede && <Markdown text={selected.lede} className="research-tab__lede" />}
 
         {anchors.length >= 2 && (
           <nav className="research-tab__sections" aria-label="Sections in this briefing">

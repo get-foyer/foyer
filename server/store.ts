@@ -134,10 +134,6 @@ export function normalizeSession(raw: unknown): Session | null {
     sessionId: s.sessionId,
     prompts: Array.isArray(s.prompts) && s.prompts.length > 0 ? s.prompts : base.prompts,
     turnSeq: typeof s.turnSeq === 'number' ? s.turnSeq : base.turnSeq,
-    // Sessions persisted before this field existed (or with a malformed value) load as null —
-    // no workflow shown until the next activity tick re-decides. base default = null.
-    workflowTurnSeq:
-      typeof s.workflowTurnSeq === 'number' ? s.workflowTurnSeq : base.workflowTurnSeq,
     focusHistory: Array.isArray(s.focusHistory) ? s.focusHistory : base.focusHistory,
     touchPoints: Array.isArray(s.touchPoints) ? s.touchPoints : base.touchPoints,
     research: Array.isArray(s.research)
@@ -169,7 +165,7 @@ export function applyRetention(sessions: Session[], now: number): Session[] {
   });
   if (kept.length > MAX_SESSIONS) {
     // Pinned sessions are user-retained — exempt them from the newest-N cap so a pin survives
-    // restart (ADR 0005), then fill the remaining slots with the newest unpinned sessions.
+    // restart (ADR 0004), then fill the remaining slots with the newest unpinned sessions.
     const pinned = kept.filter((s) => s.pinnedAt != null);
     const rest = kept
       .filter((s) => s.pinnedAt == null)

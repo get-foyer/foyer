@@ -7,7 +7,7 @@ import type {
   FocusEntry,
   SnapshotPayload,
 } from './types';
-import { newSession, MAX_FOCUS, isWorkflowVisible, sortPinnedFirst } from './types';
+import { newSession, MAX_FOCUS, sortPinnedFirst } from './types';
 import { useSSE } from './hooks/useSSE';
 import type { ConnectionStatus } from './hooks/useSSE';
 import { TaskHeader } from './components/TaskHeader';
@@ -72,10 +72,6 @@ type Action =
       payload: {
         sessionId: string;
         summary: string;
-        /** null = no workflow warranted (trivial work); the server keeps any prior storyline. */
-        graph: string | null;
-        /** Turn the workflow is shown for — drives isWorkflowVisible() in the fold-in render. */
-        workflowTurnSeq: number | null;
         topics: SuggestedTopic[];
         /** The focus-history entry the server appended this tick, or null if it was a
          *  non-meaningful repeat. Present → prepend to focusHistory (de-duped by id). */
@@ -91,6 +87,9 @@ type Action =
   | { type: 'set_view'; payload: { sessionId: string; view: SessionView } }
   /** Choose which briefing the session's Research tab shows. */
   | { type: 'select_research'; payload: { sessionId: string; ts: number } }
+  /** Mark a briefing read (optimistic; server persists via POST /research/read). Stamps readAt so
+   *  the rail row drops from "ready to read" amber to dimmed "read". */
+  | { type: 'mark_research_read'; payload: { sessionId: string; ts: number } }
   /** A suggested topic's research finished warming server-side → light its primed dot. */
   | { type: 'research_primed'; payload: { sessionId: string; topic: string } }
   /** A suggested topic's research started/stopped warming in the background → toggle its ring. */
@@ -119,29 +118,33 @@ export const initialState: State = {
   warmingTopics: {},
 };
 
-export function persistClosedSession(sessionId: string): void {
-  void fetch('/close', {
+/**
+ * Fire-and-forget POST for optimistic, server-owned UI state (close, pin, mark-read). The UI has
+ * already updated locally; this persists the intent. `keepalive: true` lets the tiny request finish
+ * across an immediate refresh/navigation, and errors are swallowed because the next snapshot
+ * reconciles authoritatively. One owner so the persistence behavior can't drift between callers.
+ */
+function postKeepalive(path: string, body: unknown): void {
+  void fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId }),
-    // Closing is optimistic in the UI; keepalive lets this tiny persistence request
-    // finish if the user refreshes or navigates immediately after clicking close.
+    body: JSON.stringify(body),
     keepalive: true,
   }).catch(() => {
-    // Best effort: the local tab is already hidden. A future snapshot will reconcile if this fails.
+    // Best effort: the local optimistic update already happened; a future snapshot reconciles.
   });
 }
 
+export function persistClosedSession(sessionId: string): void {
+  postKeepalive('/close', { sessionId });
+}
+
 export function persistPinnedSession(sessionId: string, pinned: boolean): void {
-  void fetch('/pin', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, pinned }),
-    // Pin/unpin is optimistic in the UI; keepalive lets it finish across an immediate refresh.
-    keepalive: true,
-  }).catch(() => {
-    // Best effort: the local reorder already happened. A future snapshot reconciles if this fails.
-  });
+  postKeepalive('/pin', { sessionId, pinned });
+}
+
+export function persistResearchRead(sessionId: string, ts: number): void {
+  postKeepalive('/research/read', { sessionId, ts });
 }
 
 export function isActiveSession(state: State, sessionId: string): boolean {
@@ -242,7 +245,7 @@ export function reducer(state: State, action: Action): State {
         }
         // Continue/reopen IN PLACE: adopt the server's prompt arc (source of truth — never
         // append locally, which would drift on reconnect/out-of-order), flip to working, and
-        // PRESERVE summary/graph/touchPoints/research.
+        // PRESERVE summary/touchPoints/research.
         return updateSession(state, sessionId, (s) => ({
           ...s,
           status: 'working' as const,
@@ -364,10 +367,6 @@ export function reducer(state: State, action: Action): State {
         return {
           ...s,
           summary: action.payload.summary,
-          // Mirror the server's monotonic rule: a null graph keeps the existing storyline;
-          // visibility is governed by workflowTurnSeq, not by nulling the content.
-          graph: action.payload.graph ?? s.graph,
-          workflowTurnSeq: action.payload.workflowTurnSeq,
           focusHistory,
           // Server already filtered out researched + in-flight topics before broadcasting.
           suggestedTopics: action.payload.topics,
@@ -378,7 +377,7 @@ export function reducer(state: State, action: Action): State {
     }
 
     case 'activity_generating': {
-      // Do NOT clear existing summary/graph — anti-flicker: old content stays
+      // Do NOT clear existing summary — anti-flicker: old content stays
       // visible while a refresh is in-flight; only the badge changes.
       return updateSession(state, action.payload.sessionId, (s) => ({
         ...s,
@@ -487,6 +486,22 @@ export function reducer(state: State, action: Action): State {
         ...state,
         selectedResearchBySession: { ...state.selectedResearchBySession, [sessionId]: ts },
       };
+    }
+
+    case 'mark_research_read': {
+      const { sessionId, ts } = action.payload;
+      // Idempotent: stamp readAt only on the unread match. Short-circuit to the SAME state on any
+      // no-op (unknown session/ts, or already read) so it can't trigger a needless re-render and the
+      // row stays "read" (dimmed). The server (POST /research/read) is authoritative; this is the
+      // optimistic local mirror the next snapshot reconciles.
+      const target = state.sessions
+        .find((s) => s.sessionId === sessionId)
+        ?.research.find((r) => r.ts === ts);
+      if (!target || target.readAt != null) return state;
+      return updateSession(state, sessionId, (s) => ({
+        ...s,
+        research: s.research.map((r) => (r.ts === ts ? { ...r, readAt: Date.now() } : r)),
+      }));
     }
 
     case 'research_primed': {
@@ -694,6 +709,22 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSession?.sessionId, activeSession?.status, idleTopicsKey]);
 
+  // "Read" = a briefing was actually shown in the Research tab. One place owns that fact, so every
+  // way of opening a briefing — a rail tap, a primed instant-reveal, or switching back to the
+  // Research tab on a selected-but-unread briefing — marks it read uniformly. Optimistic dispatch +
+  // server persist (POST /research/read); the guard keeps it a no-op once readAt is set.
+  const selectedResearchTs = activeId ? state.selectedResearchBySession[activeId] : undefined;
+  useEffect(() => {
+    if (!activeId || view !== 'research' || selectedResearchTs == null) return;
+    const briefing = activeSession?.research.find((r) => r.ts === selectedResearchTs);
+    if (!briefing || briefing.readAt != null) return;
+    dispatch({
+      type: 'mark_research_read',
+      payload: { sessionId: activeId, ts: selectedResearchTs },
+    });
+    persistResearchRead(activeId, selectedResearchTs);
+  }, [activeId, view, selectedResearchTs, activeSession?.research]);
+
   return (
     <div className="app">
       <TaskHeader
@@ -784,8 +815,6 @@ export default function App() {
                     status={activeSession?.activityStatus ?? 'idle'}
                     error={activeSession?.activityError ?? null}
                     sessionStatus={activeSession?.status ?? null}
-                    graph={activeSession?.graph ?? null}
-                    showWorkflow={activeSession ? isWorkflowVisible(activeSession) : false}
                   />
                 </ErrorBoundary>
               </div>

@@ -1,16 +1,8 @@
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { SummaryPanel } from './SummaryPanel';
 import type { FocusEntry } from '../types';
-
-// Stub the mermaid renderer: SummaryPanel only decides WHETHER to fold the graph in; the
-// actual mermaid.render + DOMPurify pipeline is exercised by graphSanitize.test.ts (and
-// mermaid needs a real layout engine jsdom doesn't have). This keeps these tests on the
-// branching logic — shown / hidden / sketching.
-vi.mock('./WorkflowGraph', () => ({
-  WorkflowGraph: ({ graph }: { graph: string }) => <div data-testid="workflow-graph">{graph}</div>,
-}));
 
 function entry(over: Partial<FocusEntry> = {}): FocusEntry {
   return {
@@ -34,8 +26,6 @@ function renderPanel(over: Partial<PanelProps> = {}) {
     status: 'ready',
     error: null,
     sessionStatus: 'working',
-    graph: null,
-    showWorkflow: false,
     ...over,
   };
   return render(<SummaryPanel {...props} />);
@@ -132,30 +122,5 @@ describe('SummaryPanel', () => {
   it('shows the thinking state when working with no summary yet', () => {
     renderPanel({ status: 'idle' });
     expect(screen.getByText(/Agent is thinking/)).toBeTruthy();
-  });
-
-  // -------------------------------------------------------------------------
-  // Workflow fold-in (shown only when the turn warrants it)
-  // -------------------------------------------------------------------------
-
-  it('folds in the workflow graph when showWorkflow and a graph exist', () => {
-    renderPanel({ summary: 'narration', showWorkflow: true, graph: 'graph LR\n  A:::goal' });
-    expect(screen.getByText('Workflow')).toBeTruthy();
-    expect(screen.getByTestId('workflow-graph')).toBeTruthy();
-    expect(screen.queryByText(/Sketching workflow/)).toBeNull();
-  });
-
-  it('shows the "Sketching…" hint when warranted but no graph drawn yet (e.g. just after plan mode)', () => {
-    renderPanel({ summary: 'narration', showWorkflow: true, graph: null });
-    expect(screen.getByText('Workflow')).toBeTruthy();
-    expect(screen.getByText(/Sketching workflow/)).toBeTruthy();
-    expect(screen.queryByTestId('workflow-graph')).toBeNull();
-  });
-
-  it('renders NO workflow region when the turn is trivial (showWorkflow=false), even if a graph exists', () => {
-    renderPanel({ summary: 'narration', showWorkflow: false, graph: 'graph LR\n  A:::goal' });
-    expect(screen.queryByText('Workflow')).toBeNull();
-    expect(screen.queryByTestId('workflow-graph')).toBeNull();
-    expect(screen.queryByText(/Sketching workflow/)).toBeNull();
   });
 });

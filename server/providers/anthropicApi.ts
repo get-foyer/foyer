@@ -9,16 +9,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { cfg } from '../config.js';
 import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
-import { stripFences, RESEARCH_PROMPT, parseResearchSections } from './text.js';
-
-const GRAPH_PROMPT = (plan: string) =>
-  `Convert the following task plan into a concise Mermaid flowchart.
-Use "graph TD" (top-down) syntax. Output ONLY the mermaid diagram code — no explanation, no markdown fences.
-Wrap every node label in double quotes so that spaces and special characters are handled correctly — for example A["Read file.ts"] instead of A[Read file.ts].
-Keep each node label short (≤ 5 words) so nodes stay compact and readable.
-
-Plan:
-${plan.slice(0, 8000)}`;
+import { RESEARCH_PROMPT, parseResearchSections } from './text.js';
 
 export class AnthropicApiProvider implements LlmProvider {
   readonly id = 'anthropic-api' as const;
@@ -40,21 +31,9 @@ export class AnthropicApiProvider implements LlmProvider {
     return Boolean(cfg.anthropicApiKey?.startsWith('sk-ant-'));
   }
 
-  async generateGraph(planText: string): Promise<string> {
-    const client = this.getClient();
-    const response = await client.messages.create({
-      model: cfg.anthropicModel,
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: GRAPH_PROMPT(planText) }],
-    });
-
-    const text = extractText(response.content);
-    return stripFences(text);
-  }
-
   async summarizeActivity(
     ctx: ActivityContext,
-  ): Promise<{ summary: string; graph: string | null; topics: SuggestedTopic[] }> {
+  ): Promise<{ summary: string; topics: SuggestedTopic[] }> {
     const { buildActivityPrompt } = await import('./codex.js');
     const { parseActivityJson } = await import('./claudeCli.js');
     const client = this.getClient();
@@ -62,13 +41,13 @@ export class AnthropicApiProvider implements LlmProvider {
     const prompt = buildActivityPrompt(ctx);
     const response = await client.messages.create({
       model: cfg.anthropicModel,
-      // Bumped from 1024 to fit the added topics array alongside summary + graph.
+      // Sized to fit the summary + topics array.
       max_tokens: 1536,
       // No web_search — this is summarisation, not research; keeps cost low
       messages: [
         {
           role: 'user',
-          content: `${prompt}\n\nRespond with ONLY a JSON object matching this schema: { "summary": string, "graph": string, "topics": Array<{ "topic": string, "reason": string }> }. No markdown fences, no explanation.`,
+          content: `${prompt}\n\nRespond with ONLY a JSON object matching this schema: { "summary": string, "topics": Array<{ "topic": string, "reason": string }> }. No markdown fences, no explanation.`,
         },
       ],
     });

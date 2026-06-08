@@ -1,4 +1,4 @@
-/* Foyer Gate — dashboard styles */
+/* Foyer Lobby — dashboard styles */
 
 /* -------------------------------------------------------------------------
    Reset + base
@@ -945,89 +945,6 @@ body {
   word-break: break-word;
 }
 
-/* -------------------------------------------------------------------------
-   Workflow storyline — folded into Current Focus (shown only when warranted)
-   ------------------------------------------------------------------------- */
-.summary-panel__workflow {
-  position: relative; /* anchors the right-edge scroll fade */
-  flex: none;
-  border-bottom: 1px solid var(--border);
-}
-
-.summary-panel__workflow-label {
-  display: block;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  padding: 8px 14px 0;
-}
-
-.summary-panel__workflow-sketching {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--text-dim);
-  font-size: 14px;
-  padding: 12px 14px 16px;
-}
-
-.workflow-graph__svg {
-  padding: 12px 14px 16px;
-  overflow: auto;
-  max-height: 260px;
-}
-
-.workflow-graph__svg svg {
-  display: block;
-  margin: auto;
-}
-
-/* Default (un-highlighted) phase nodes ONLY — never the :::goal / :::active
-   nodes, which carry their own classDef colors and encode which step the agent
-   is on. Gives plain phase nodes the app's surface + border + corner radius so
-   the storyline reads as one intentional component instead of mermaid's default
-   mismatched boxes. The :not() guard keeps the active-step highlight intact. */
-.workflow-graph__svg svg .node:not(.goal):not(.active) > rect,
-.workflow-graph__svg svg .node:not(.goal):not(.active) > polygon,
-.workflow-graph__svg svg .node:not(.goal):not(.active) > circle,
-.workflow-graph__svg svg .node:not(.goal):not(.active) > ellipse,
-.workflow-graph__svg svg .node:not(.goal):not(.active) > path {
-  fill: var(--surface-2) !important;
-  stroke: var(--border-light) !important;
-  rx: var(--radius);
-  ry: var(--radius);
-}
-
-/* Right-edge fade: signals the horizontal storyline scrolls instead of looking
-   abruptly clipped. Anchored to the workflow block (not the whole panel) so it
-   covers only the graph strip and stops above the bottom hairline. */
-.summary-panel__workflow::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 1px;
-  width: 28px;
-  background: linear-gradient(to right, transparent, var(--surface));
-  pointer-events: none;
-}
-
-.workflow-graph__error {
-  padding: 12px 14px 16px;
-}
-.workflow-graph__raw {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-dim);
-  white-space: pre-wrap;
-  margin-top: 8px;
-  background: var(--surface-2);
-  padding: 10px;
-  border-radius: var(--radius-sm);
-}
-
 .error-label {
   color: var(--red);
   font-size: 14px;
@@ -1153,15 +1070,15 @@ body {
   overflow-y: auto;
 }
 
-/* Suggested research topics — clickable chips derived from the agent's work. */
-.research-topics {
+/* Unified Deep Research list — one section holding suggested-topic chips AND briefing rows
+   (unread → suggested → read). No internal divider: state, not a header, separates the groups. */
+.research-list {
   list-style: none;
   margin: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
 }
 
 .research-chip {
@@ -1254,29 +1171,12 @@ body {
   padding: 8px 14px;
 }
 
-/* Ready-list — compact index of completed briefings in the rail launcher. Tapping a row
-   opens the full-width Research tab on that briefing; full reading lives there, not here.
-   Scrolls with .research-panel__body (no separate scroll region). */
-.research-ready-list {
-  padding: 10px 14px;
-}
-
-.research-ready-list__label {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: 6px;
-}
-
-.research-ready-list ul {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
+/* Briefing rows inside .research-list — a completed briefing. Tapping a row opens the full-width
+   Research tab; full reading lives there, not here. Two states share this markup:
+   - unread (ready to read): solid amber pip — the "it's waiting for you" signal.
+   - read: dimmed text + a hollow dim ring — no amber, so amber stays a rare live/ready signal
+     (DESIGN.md). Distinct from unread by BOTH shape (hollow vs solid) and color, mirroring the
+     warming-ring / primed-dot shape language so it survives prefers-reduced-motion. */
 .research-ready-row {
   width: 100%;
   display: flex;
@@ -1302,13 +1202,25 @@ body {
   outline-offset: -2px;
 }
 
-/* Amber "ready" pip. --working forward-maps to the Instrument --signal accent (DESIGN.md). */
+/* Read row: recede. Dim the text so unread briefings (full-strength + amber) read as the live ones. */
+.research-ready-row--read {
+  color: var(--text-dim);
+}
+
+/* Amber "ready" pip (unread). --working forward-maps to the Instrument --signal accent (DESIGN.md). */
 .research-ready-row__dot {
   flex-shrink: 0;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--working);
+}
+
+/* Read pip: hollow dim ring, no amber. Shape + color both say "not the live signal anymore". */
+.research-ready-row__dot--read {
+  box-sizing: border-box;
+  background: transparent;
+  border: 1px solid var(--text-dim);
 }
 
 .research-ready-row__topic {
@@ -1583,7 +1495,10 @@ body {
 }
 
 /* TL;DR lede — the 2-second gist above the sections. */
-.research-tab__lede {
+/* Lede now renders through <Markdown> (wrapper carries `.markdown` too) so inline code,
+   links, and emphasis parse like the rest of the briefing. The compound selector outranks
+   the bare `.markdown` base (defined later) so the lede keeps its 16px/500 hierarchy. */
+.markdown.research-tab__lede {
   font-size: 16px;
   line-height: 1.6;
   font-weight: 500;
@@ -1593,6 +1508,11 @@ body {
   padding-left: 12px;
   /* Neutral callout bar — the lede's weight + size carry hierarchy; amber stays signal-only. */
   border-left: 2px solid var(--border-light);
+}
+
+/* The 24px wrapper margin governs lede spacing; drop the inner paragraph's trailing margin. */
+.research-tab__lede p:last-child {
+  margin-bottom: 0;
 }
 
 /* One doc section. scroll-margin so the section-index jump doesn't tuck the heading under the head. */

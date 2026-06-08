@@ -15,7 +15,7 @@ vi.mock('./MermaidFigure', () => ({
 const results: ResearchResult[] = [
   {
     topic: 'Caching strategies',
-    lede: 'Caching trades freshness for speed.',
+    lede: 'Caching trades freshness for speed via `invalidateCache`.',
     sections: [
       { heading: 'Overview', body: 'Cache invalidation is hard.' },
       {
@@ -59,6 +59,14 @@ describe('ResearchTab', () => {
   it('renders the TL;DR lede above the sections', () => {
     render(<ResearchTab results={results} selectedTs={2000} onSelect={() => {}} />);
     expect(screen.getByText(/caching trades freshness for speed/i)).toBeTruthy();
+  });
+
+  it('parses markdown in the lede — inline code becomes a <code> span, not literal backticks', () => {
+    render(<ResearchTab results={results} selectedTs={2000} onSelect={() => {}} />);
+    const code = screen.getByText('invalidateCache');
+    expect(code.tagName).toBe('CODE');
+    // No raw backtick leaked into the rendered text.
+    expect(screen.queryByText(/`invalidateCache`/)).toBeNull();
   });
 
   it('renders the section index when a briefing has 2+ sections', () => {

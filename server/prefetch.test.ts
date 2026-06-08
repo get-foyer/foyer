@@ -63,9 +63,8 @@ function makeProvider() {
   const provider = {
     id: 'codex',
     isAvailable: async () => true,
-    generateGraph: async () => '',
     research,
-    summarizeActivity: async () => ({ summary: '', graph: '', topics: [] }),
+    summarizeActivity: async () => ({ summary: '', topics: [] }),
   } as unknown as LlmProvider;
   setActiveProvider(provider);
   const take = (topic?: string): Pending => {
@@ -121,7 +120,6 @@ describe('schedulePrefetch + warm-loop', () => {
     makeProvider();
     setActivity('s1', {
       summary: 's',
-      graph: 'g',
       topics: topics('rsc', 'vite'),
       turnSeq: 1,
       turnPrompt: 'goal',

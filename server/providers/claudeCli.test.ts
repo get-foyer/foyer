@@ -42,56 +42,31 @@ vi.mock('child_process', async (importOriginal) => {
 // ---------------------------------------------------------------------------
 
 describe('parseActivityJson', () => {
-  it('parses a valid { summary, graph } JSON object', () => {
-    const raw = JSON.stringify({
-      summary: 'Agent is refactoring the auth module.',
-      graph: 'graph TD\n  A[Start] --> B[Auth]:::active\n  classDef active fill:#1f6feb',
-    });
+  it('parses a valid { summary } JSON object', () => {
+    const raw = JSON.stringify({ summary: 'Agent is refactoring the auth module.' });
     const result = parseActivityJson(raw);
     expect(result.summary).toBe('Agent is refactoring the auth module.');
-    expect(result.graph).toContain('graph TD');
   });
 
   it('strips markdown fences before parsing', () => {
-    const raw =
-      '```json\n' +
-      JSON.stringify({ summary: 'Working on tests.', graph: 'graph TD\n  A[Test]' }) +
-      '\n```';
+    const raw = '```json\n' + JSON.stringify({ summary: 'Working on tests.' }) + '\n```';
     const result = parseActivityJson(raw);
     expect(result.summary).toBe('Working on tests.');
   });
 
-  it('falls back gracefully when JSON is invalid (graph → null = no workflow)', () => {
+  it('falls back gracefully when JSON is invalid (keeps the text as summary)', () => {
     const result = parseActivityJson('not valid JSON at all');
     expect(result.summary).toBe('not valid JSON at all');
-    expect(result.graph).toBeNull();
   });
 
-  it('returns a null graph (no workflow) when the graph field is missing', () => {
+  it('defaults summary to a placeholder when the field is missing', () => {
     const result = parseActivityJson(JSON.stringify({}));
     expect(result.summary).toBe('Agent is working…');
-    expect(result.graph).toBeNull();
-  });
-
-  it('returns a null graph when the model explicitly sends graph: null (trivial work)', () => {
-    const result = parseActivityJson(JSON.stringify({ summary: 'Quick fix.', graph: null }));
-    expect(result.summary).toBe('Quick fix.');
-    expect(result.graph).toBeNull();
-  });
-
-  it('strips mermaid fences from the graph field', () => {
-    const raw = JSON.stringify({
-      summary: 'Building API.',
-      graph: '```mermaid\ngraph TD\n  A-->B\n```',
-    });
-    const result = parseActivityJson(raw);
-    expect(result.graph).toBe('graph TD\n  A-->B');
   });
 
   it('parses and normalizes the topics array', () => {
     const raw = JSON.stringify({
       summary: 'S',
-      graph: 'graph TD\n  A',
       topics: [
         { topic: 'React useTransition', reason: 'used in App.tsx' },
         { topic: '', reason: 'dropped — no topic' },
@@ -102,7 +77,7 @@ describe('parseActivityJson', () => {
   });
 
   it('defaults topics to [] when the field is missing', () => {
-    const result = parseActivityJson(JSON.stringify({ summary: 'S', graph: 'G' }));
+    const result = parseActivityJson(JSON.stringify({ summary: 'S' }));
     expect(result.topics).toEqual([]);
   });
 

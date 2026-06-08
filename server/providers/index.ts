@@ -22,34 +22,22 @@ export interface ActivityContext {
   /** Compact text extracted from the end of the agent's transcript. */
   transcriptTail: string;
   /**
-   * The storyline graph emitted on the previous run (null on first run).
-   * Fed back so the model can EXTEND it append-only — keeping the silhouette
-   * stable across ticks instead of redrawing from scratch each time.
-   */
-  previousGraph: string | null;
-  /**
    * Topics suggested on the previous run (empty on first run). Fed back so the model
-   * keeps them stable across ticks (same anti-churn pattern as previousGraph) and only
-   * changes them when the agent's focus shifts.
+   * keeps them stable across ticks (anti-churn) and only changes them when the agent's
+   * focus shifts.
    */
   previousTopics: SuggestedTopic[];
-  /** Session lifecycle status, so the storyline's terminal chip is accurate. */
+  /** Session lifecycle status, so the narration's terminal state is accurate. */
   status: SessionStatus;
   /** Why the session is blocked on the user, if waiting (e.g. a permission prompt). */
   waitingReason: string | null;
-  /**
-   * True when the agent exited plan mode this turn (ExitPlanMode fired). The hybrid
-   * workflow-visibility trigger forces a graph when planned, so the prompt is told to
-   * always draw a multi-phase storyline rather than returning null for this turn.
-   */
-  planned: boolean;
 }
 
 /**
  * The contract every LLM backend must implement.
  *
  * HOOK ISOLATION REQUIREMENT: any subprocess or API call made inside
- * generateGraph(), research(), or summarizeActivity() must NOT fire agent
+ * research() or summarizeActivity() must NOT fire agent
  * lifecycle hooks back to this server.  Failure to ensure this creates a
  * phantom-task loop where the server's own inference work registers as new
  * user sessions titled "You are narrating, for a live dashboard…".
@@ -80,26 +68,17 @@ export interface ActivityContext {
 export interface LlmProvider {
   readonly id: ProviderKind;
   isAvailable(): Promise<boolean>;
-  /** Convert a plan text to Mermaid flowchart syntax. */
-  generateGraph(planText: string): Promise<string>;
   /** Return a sourced research briefing for a topic. */
   research(topic: string): Promise<ResearchResult>;
   /**
-   * Produce a live summary and a Mermaid `graph LR` milestone storyline of what
-   * the agent is doing right now, given the session context.
-   * Returns { summary, graph } where:
+   * Produce a live summary of what the agent is doing right now, given the session context.
+   * Returns { summary, topics } where:
    *   summary = 2-4 sentences of markdown (present tense, no preamble)
-   *   graph   = Mermaid `graph LR` storyline (a :::goal subject node + 3-6
-   *             intent-named phases, :::active on the current one), OR null when
-   *             the work does not warrant a workflow graph (trivial/single-step).
-   *             Normalized via normalizeGraph() (server/providers/text.ts).
    *   topics  = 3-6 research topics derived from the agent's work, each with a
    *             one-line `reason` (provenance). May be []. Normalized via
    *             normalizeTopics() (server/providers/text.ts) at each parse site.
    */
-  summarizeActivity(
-    ctx: ActivityContext,
-  ): Promise<{ summary: string; graph: string | null; topics: SuggestedTopic[] }>;
+  summarizeActivity(ctx: ActivityContext): Promise<{ summary: string; topics: SuggestedTopic[] }>;
 }
 
 // Lazy singleton — set after the server reads config

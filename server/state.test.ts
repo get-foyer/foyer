@@ -13,6 +13,7 @@ import {
   getSession,
   resolveResearchSession,
   addResearch,
+  markResearchRead,
   addResearchInFlight,
   removeResearchInFlight,
   isResearchInFlight,
@@ -24,9 +25,8 @@ import {
   setSessionEndListener,
   setSessionDropListener,
   flushAll,
-  markPlanned,
 } from './state.js';
-import { MAX_FOCUS, newSession, isWorkflowVisible } from '../src/types.js';
+import { MAX_FOCUS, newSession } from '../src/types.js';
 import type { Session } from '../src/types.js';
 import { DONE_TTL_MS, MAX_SESSIONS, type SessionStore } from './store.js';
 
@@ -35,7 +35,6 @@ const topic = (t: string, reason = 'because') => ({ topic: t, reason });
 /** Build a setActivity update with focus-append defaults; override per test. */
 const act = (over: Partial<Parameters<typeof setActivity>[1]> = {}) => ({
   summary: 'doing work',
-  graph: 'graph LR\n  A',
   topics: [],
   turnSeq: 1,
   turnPrompt: 'task',
@@ -195,7 +194,7 @@ describe('startSession — new vs continue', () => {
   it('continuing an existing id appends the arc, reopens to working, and PRESERVES accumulated state', () => {
     startSession('s1', 'goal');
     addTouchPoint('s1', { path: '/a.ts', tool: 'Write', ts: 1 });
-    setActivity('s1', act({ summary: 'did the goal', graph: 'graph LR\n  G:::goal' }));
+    setActivity('s1', act({ summary: 'did the goal' }));
     finishSession('s1');
     const startedAt = getAllSessions()[0].startedAt;
 
@@ -208,7 +207,6 @@ describe('startSession — new vs continue', () => {
     expect(session.finishedAt).toBeNull();
     // Accumulated state preserved across the turn
     expect(session.summary).toBe('did the goal');
-    expect(session.graph).toBe('graph LR\n  G:::goal');
     expect(session.touchPoints).toHaveLength(1);
     expect(session.startedAt).toBe(startedAt);
   });
@@ -310,12 +308,11 @@ describe('setActivityGenerating / setActivity / setActivityError', () => {
     expect(setActivityGenerating('ghost')).toBe(false);
   });
 
-  it('setActivity sets summary, graph, activityStatus=ready, activityError=null', () => {
+  it('setActivity sets summary, activityStatus=ready, activityError=null', () => {
     startSession('sess', 'task');
     setActivityGenerating('sess');
     const entry = setActivity('sess', {
       summary: 'Working on auth.',
-      graph: 'graph TD\n  A-->B',
       topics: [],
       turnSeq: 1,
       turnPrompt: 'task',
@@ -324,7 +321,6 @@ describe('setActivityGenerating / setActivity / setActivityError', () => {
     expect(entry).not.toBeNull();
     const s = getAllSessions()[0];
     expect(s.summary).toBe('Working on auth.');
-    expect(s.graph).toBe('graph TD\n  A-->B');
     expect(s.activityStatus).toBe('ready');
     expect(s.activityError).toBeNull();
   });
@@ -405,108 +401,6 @@ describe('focus history', () => {
     const s = getSession('s1')!;
     expect(s.focusHistory).toHaveLength(MAX_FOCUS);
     expect(s.focusHistory[0].summary).toBe(`step ${MAX_FOCUS + 9}`); // newest first
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Workflow visibility — setActivity sticky decision + ephemeral plan-mode floor
-// ---------------------------------------------------------------------------
-
-describe('workflow visibility — setActivity sticky + planned floor', () => {
-  it('a non-null graph shows the workflow for that turn', () => {
-    startSession('s', 'goal');
-    setActivity('s', act({ graph: 'graph LR\n  G:::goal', turnSeq: 1 }));
-    const s = getSession('s')!;
-    expect(s.workflowTurnSeq).toBe(1);
-    expect(isWorkflowVisible(s)).toBe(true);
-    expect(s.graph).toBe('graph LR\n  G:::goal');
-  });
-
-  it('a null graph on a non-planned turn does NOT show the workflow', () => {
-    startSession('s', 'goal');
-    setActivity('s', act({ graph: null, turnSeq: 1 }));
-    const s = getSession('s')!;
-    expect(s.workflowTurnSeq).toBeNull();
-    expect(isWorkflowVisible(s)).toBe(false);
-    expect(s.graph).toBeNull();
-  });
-
-  it('markPlanned floors visibility ON even when the model returns a null graph', () => {
-    startSession('s', 'goal');
-    markPlanned('s'); // ExitPlanMode fired on turn 1
-    setActivity('s', act({ graph: null, turnSeq: 1 }));
-    const s = getSession('s')!;
-    expect(s.workflowTurnSeq).toBe(1); // shown via the plan-mode floor
-    expect(isWorkflowVisible(s)).toBe(true);
-    expect(s.graph).toBeNull(); // ...but no storyline yet → SummaryPanel shows "Sketching…"
-  });
-
-  it('is sticky within a turn: a later null tick keeps both the graph and the visibility', () => {
-    startSession('s', 'goal');
-    setActivity('s', act({ graph: 'graph LR\n  A:::goal', turnSeq: 1 }));
-    setActivity('s', act({ graph: null, turnSeq: 1 })); // a quieter tick, same turn
-    const s = getSession('s')!;
-    expect(s.workflowTurnSeq).toBe(1);
-    expect(isWorkflowVisible(s)).toBe(true);
-    expect(s.graph).toBe('graph LR\n  A:::goal'); // never overwritten with null (monotonic)
-  });
-
-  it('re-decides fresh on a new turn: a trivial turn-2 hides the turn-1 workflow', () => {
-    startSession('s', 'goal'); // turn 1
-    setActivity('s', act({ graph: 'graph LR\n  A:::goal', turnSeq: 1 }));
-    startSession('s', 'tiny follow-up'); // bump → turn 2
-    setActivity('s', act({ graph: null, turnSeq: 2 }));
-    const s = getSession('s')!;
-    expect(s.turnSeq).toBe(2);
-    expect(s.workflowTurnSeq).toBe(1); // stamp is now stale
-    expect(isWorkflowVisible(s)).toBe(false); // hidden on turn 2
-    expect(s.graph).toBe('graph LR\n  A:::goal'); // storyline content survives the hidden turn
-  });
-
-  it('re-shows on a later multi-phase turn with the extended storyline', () => {
-    startSession('s', 'goal'); // turn 1
-    setActivity('s', act({ graph: 'graph LR\n  A:::goal', turnSeq: 1 }));
-    startSession('s', 'trivial'); // turn 2
-    setActivity('s', act({ graph: null, turnSeq: 2 }));
-    startSession('s', 'big follow-up'); // turn 3
-    setActivity('s', act({ graph: 'graph LR\n  A-->B:::active', turnSeq: 3 }));
-    const s = getSession('s')!;
-    expect(s.turnSeq).toBe(3);
-    expect(s.workflowTurnSeq).toBe(3);
-    expect(isWorkflowVisible(s)).toBe(true);
-    expect(s.graph).toBe('graph LR\n  A-->B:::active');
-  });
-
-  it('a non-null pivot graph overwrites the previous storyline (content is not frozen)', () => {
-    startSession('s', 'goal');
-    setActivity('s', act({ graph: 'graph LR\n  A:::goal', turnSeq: 1 }));
-    setActivity('s', act({ graph: 'graph LR\n  PIVOT:::goal', turnSeq: 1 }));
-    expect(getSession('s')!.graph).toBe('graph LR\n  PIVOT:::goal');
-  });
-
-  it('drops the plan-mode marker on finish so it cannot leak into a reopened turn', () => {
-    startSession('s', 'goal');
-    markPlanned('s');
-    finishSession('s'); // clears the ephemeral marker
-    startSession('s', 'reopened'); // turn 2, NOT planned
-    setActivity('s', act({ graph: null, turnSeq: 2 }));
-    expect(isWorkflowVisible(getSession('s')!)).toBe(false); // no stale plan floor
-  });
-});
-
-describe('isWorkflowVisible', () => {
-  it('false when workflowTurnSeq is null', () => {
-    expect(isWorkflowVisible(newSession('s', 'g', 1))).toBe(false);
-  });
-  it('true when workflowTurnSeq === turnSeq', () => {
-    expect(isWorkflowVisible({ ...newSession('s', 'g', 1), turnSeq: 4, workflowTurnSeq: 4 })).toBe(
-      true,
-    );
-  });
-  it('false when workflowTurnSeq is stale (!== turnSeq)', () => {
-    expect(isWorkflowVisible({ ...newSession('s', 'g', 1), turnSeq: 5, workflowTurnSeq: 3 })).toBe(
-      false,
-    );
   });
 });
 
@@ -618,6 +512,51 @@ describe('addResearch — chip removal', () => {
     expect(s.research).toHaveLength(1);
     expect(s.suggestedTopics.map((t) => t.topic)).toEqual(['Mermaid graph LR']);
     expect(isResearchInFlight('s', 'React useTransition')).toBe(false);
+  });
+});
+
+describe('markResearchRead', () => {
+  const briefing = (ts: number) => ({
+    topic: `Topic ${ts}`,
+    lede: '',
+    sections: [{ heading: 'h', body: 'x' }],
+    links: [],
+    ts,
+  });
+
+  it('stamps a numeric readAt on the matching briefing', () => {
+    startSession('s', 'task');
+    addResearch('s', briefing(1));
+    expect(getSession('s')!.research[0].readAt).toBeUndefined();
+
+    expect(markResearchRead('s', 1)).toBe(true);
+    expect(typeof getSession('s')!.research[0].readAt).toBe('number');
+  });
+
+  it('is idempotent — a second open leaves the original readAt untouched', () => {
+    startSession('s', 'task');
+    addResearch('s', briefing(1));
+    markResearchRead('s', 1);
+    const first = getSession('s')!.research[0].readAt;
+    expect(markResearchRead('s', 1)).toBe(true);
+    expect(getSession('s')!.research[0].readAt).toBe(first);
+  });
+
+  it('returns false for an unknown session or unknown ts', () => {
+    expect(markResearchRead('ghost', 1)).toBe(false);
+    startSession('s', 'task');
+    addResearch('s', briefing(1));
+    expect(markResearchRead('s', 999)).toBe(false);
+  });
+
+  it('flushes immediately (write-through), mirroring pinSession', () => {
+    const rec = recordingStore();
+    initPersistence(rec.store);
+    startSession('s', 'task');
+    addResearch('s', briefing(1));
+    rec.saved.length = 0; // ignore prior writes
+    markResearchRead('s', 1);
+    expect(rec.saved.some((x) => x.sessionId === 's' && x.research[0].readAt != null)).toBe(true);
   });
 });
 

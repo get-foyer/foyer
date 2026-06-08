@@ -23,18 +23,11 @@ import { readFile, unlink, mkdtemp, rm } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
-import {
-  stripFences,
-  normalizeTopics,
-  normalizeGraph,
-  RESEARCH_PROMPT,
-  parseResearchSections,
-} from './text.js';
+import { normalizeTopics, RESEARCH_PROMPT, parseResearchSections } from './text.js';
 import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './internal.js';
 
 const execFile = promisify(_execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SCHEMA_PATH = join(__dirname, 'schema', 'mermaid.schema.json');
 const ACTIVITY_SCHEMA_PATH = join(__dirname, 'schema', 'activity.schema.json');
 
 // features.hooks=false disables Codex's own lifecycle hooks at runtime so the
@@ -66,39 +59,9 @@ export class CodexProvider implements LlmProvider {
     }
   }
 
-  async generateGraph(planText: string): Promise<string> {
-    const prompt = `Convert the following task plan into a concise Mermaid flowchart.
-Use "graph TD" (top-down) syntax. Output ONLY the mermaid diagram code — no explanation, no markdown fences.
-Focus on the key phases/steps and their dependencies.
-Wrap every node label in double quotes so that spaces and special characters are handled correctly — for example A["Read file.ts"] instead of A[Read file.ts].
-Keep each node label short (≤ 5 words) so nodes stay compact and readable.
-
-Plan:
-${planText.slice(0, 4000)}`; // cap to avoid huge context
-
-    const outFile = join(tmpdir(), `foyer-graph-${Date.now()}.json`);
-
-    try {
-      await runCodexWithStdin(prompt, [
-        ...FAST_FLAGS,
-        '--output-schema',
-        SCHEMA_PATH,
-        '-o',
-        outFile,
-      ]);
-
-      const raw = await readFile(outFile, 'utf-8');
-      const parsed = JSON.parse(raw) as { mermaid?: string };
-      const mermaid = parsed.mermaid ?? raw;
-      return stripFences(mermaid);
-    } finally {
-      await unlink(outFile).catch(() => {});
-    }
-  }
-
   async summarizeActivity(
     ctx: ActivityContext,
-  ): Promise<{ summary: string; graph: string | null; topics: SuggestedTopic[] }> {
+  ): Promise<{ summary: string; topics: SuggestedTopic[] }> {
     const prompt = buildActivityPrompt(ctx);
     const outFile = join(tmpdir(), `foyer-activity-${Date.now()}.json`);
 
@@ -112,11 +75,9 @@ ${planText.slice(0, 4000)}`; // cap to avoid huge context
       ]);
 
       const raw = await readFile(outFile, 'utf-8');
-      const parsed = JSON.parse(raw) as { summary?: string; graph?: string; topics?: unknown };
+      const parsed = JSON.parse(raw) as { summary?: string; topics?: unknown };
       return {
         summary: parsed.summary ?? 'Agent is working…',
-        // null = "no workflow warranted this session" → dashboard shows no graph region.
-        graph: normalizeGraph(parsed.graph),
         topics: normalizeTopics(parsed.topics),
       };
     } finally {
@@ -277,47 +238,20 @@ export function buildActivityPrompt(ctx: ActivityContext): string {
       ? `waiting on the user${ctx.waitingReason ? ` — ${ctx.waitingReason}` : ''}`
       : ctx.status;
 
-  // The :::active rule depends on lifecycle: while working, light the current
-  // phase; while waiting, append a reason chip and light THAT; when done there
-  // is no "current" phase, so no active marker.
-  const activeRule =
-    ctx.status === 'waiting'
-      ? 'The session is WAITING on the user — append a final node naming why (e.g. "Awaiting your OK") and put :::active on THAT node.'
-      : ctx.status === 'done'
-        ? 'The session is DONE — the last phase is the end; no :::active marker is required.'
-        : 'Put :::active on the single phase the agent is in right now.';
-
   const previousTopicsList = ctx.previousTopics?.length
     ? ctx.previousTopics.map((t) => `  - ${t.topic}`).join('\n')
     : '(none yet)';
 
-  // Workflow visibility gate (hybrid trigger): when the agent went through plan mode this turn
-  // the work is inherently multi-phase, so always draw a graph. Otherwise the model decides —
-  // trivial/single-step work returns null and the dashboard shows no workflow region at all.
-  const workflowGate = ctx.planned
-    ? 'This turn has an APPROVED PLAN (the agent exited plan mode), so the work is inherently multi-phase — you MUST return a graph; do NOT return null.'
-    : 'FIRST decide whether this session even warrants a workflow graph. If it is a single-step task, a quick question/answer, or trivial linear work with no real phases, set "graph" to null and skip the rules below — the dashboard will simply show no workflow. Only draw a graph when there are genuine multi-phase milestones (about 3 or more). Never invent phases to fill a graph.';
-
   return `You are narrating, for a live dashboard, what a coding agent is doing in a session.
-The dashboard shows many sessions side by side, so the graph must be a GLANCEABLE FINGERPRINT of THIS session: an engineer should glance once and instantly know what the session is about and where it is.
+The dashboard shows many sessions side by side, so the summary must read at a glance: an engineer should glance once and instantly know what the session is about and where it is.
 
-Given the agent's original task, recent file operations, a tail of the agent's transcript, and the storyline you drew last time, return JSON with three fields:
+Given the agent's original task, recent file operations, and a tail of the agent's transcript, return JSON with two fields:
 
 - "summary": 2-4 sentences of markdown — what the agent is working on at this moment and what it just did. Present tense. No preamble.
 
-- "graph": EITHER null, OR a Mermaid **graph LR** MILESTONE STORYLINE of the session. ${workflowGate} When you DO draw a graph, follow every rule:
-  1. Nodes are intent-named PHASES of the work (a goal the agent pursued, e.g. "Diagnose token expiry", "Patch auth flow", "Run tests"). NEVER a raw tool call like "Read file.ts" or "Bash npm test".
-  2. The FIRST node is a rounded subject node naming the whole session goal in ≤5 words, derived from the original task, tagged with the goal class — for example: G(["Fix login bug"]):::goal
-  3. Then 3-6 phase nodes left-to-right in the order they happened. ${activeRule}
-  4. APPEND-ONLY: the previous storyline is given below. Keep its existing node ids, labels, and order UNCHANGED — only append new phases and move the :::active marker. Redraw from scratch ONLY if the task has clearly pivoted.
-  5. Hard cap: at most 6 nodes after the goal node. Wrap every label in double quotes — A["…"]. Keep labels ≤ 5 words. Output mermaid only (no code fences).
-  6. End with both class definitions exactly:
-     classDef goal fill:#161b22,stroke:#4493f8,color:#fff;
-     classDef active fill:#1f6feb,stroke:#4493f8,color:#fff;
-
 - "topics": an array of 3-6 research topics worth reading up on while the user waits, derived from THIS session's work — follow every rule:
   1. Each item is { "topic": "...", "reason": "..." }. "topic" is concise and searchable (≤120 chars, e.g. "React useTransition hook"). "reason" is one short line grounding it in the work (≤160 chars, e.g. "you're editing App.tsx which uses useTransition").
-  2. Draw from what's actually in play: libraries/APIs being used, concepts the work depends on, error messages seen, unfamiliar terms or commands. Prefer specific over generic ("Mermaid graph LR syntax", not "diagrams").
+  2. Draw from what's actually in play: libraries/APIs being used, concepts the work depends on, error messages seen, unfamiliar terms or commands. Prefer specific over generic ("Zod schema refinement", not "validation").
   3. EXTRACTION ONLY — do NOT search the web; infer topics from the task, files, and transcript provided.
   4. Skip the trivial/obvious (no "what is JavaScript"). If nothing is worth suggesting, return an empty array.
   5. STABILITY: keep the previously-suggested topics below unless the focus has clearly shifted — reuse the same wording so chips don't churn.
@@ -331,9 +265,6 @@ ${touchList || '  (none yet)'}
 
 Recent transcript tail:
 ${ctx.transcriptTail.slice(0, 3000) || '(no transcript available yet)'}
-
-Previous storyline (extend it, do not redraw):
-${ctx.previousGraph ?? '(none yet — this is the first draft)'}
 
 Previously-suggested topics (keep stable unless the focus shifted):
 ${previousTopicsList}`;

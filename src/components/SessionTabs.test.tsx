@@ -13,8 +13,6 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     turnSeq: 1,
     summary: null,
     focusHistory: [],
-    graph: null,
-    workflowTurnSeq: null,
     activityStatus: 'idle',
     activityError: null,
     waitingReason: null,

@@ -100,8 +100,6 @@ describe('reducer — research warming (in-flight prefetch ring)', () => {
       payload: {
         sessionId: 's1',
         summary: 'x',
-        graph: null,
-        workflowTurnSeq: null,
         topics: [{ topic: 'keep', reason: 'still relevant' }],
         entry: null,
       },
@@ -125,5 +123,48 @@ describe('reducer — research warming (in-flight prefetch ring)', () => {
     const next = reducer(warmed, { type: 'close', payload: { sessionId: 's1' } });
     expect(next.warmingTopics.s1).toBeUndefined();
     expect(next.warmingTopics.s2).toEqual(['b']);
+  });
+});
+
+describe('reducer — mark_research_read (readAt optimistic mirror)', () => {
+  const briefing = (ts: number, readAt: number | null = null) => ({
+    topic: `T${ts}`,
+    lede: '',
+    sections: [],
+    links: [],
+    ts,
+    readAt,
+  });
+  const withResearch = (research: ReturnType<typeof briefing>[]) => {
+    const base = withSessions([mk('s1', 1)]);
+    return { ...base, sessions: [{ ...base.sessions[0], research }] };
+  };
+
+  it('stamps readAt on the matching unread briefing', () => {
+    const next = reducer(withResearch([briefing(10)]), {
+      type: 'mark_research_read',
+      payload: { sessionId: 's1', ts: 10 },
+    });
+    expect(next.sessions[0].research[0].readAt).toEqual(expect.any(Number));
+  });
+
+  it('is idempotent — leaves an already-read briefing untouched', () => {
+    const start = withResearch([briefing(10, 5000)]);
+    const next = reducer(start, {
+      type: 'mark_research_read',
+      payload: { sessionId: 's1', ts: 10 },
+    });
+    expect(next.sessions[0].research[0].readAt).toBe(5000);
+    expect(next).toBe(start); // no-op short-circuits (referential identity preserved)
+  });
+
+  it('unknown session or ts is a no-op', () => {
+    const start = withResearch([briefing(10)]);
+    expect(
+      reducer(start, { type: 'mark_research_read', payload: { sessionId: 'ghost', ts: 10 } }),
+    ).toBe(start);
+    expect(
+      reducer(start, { type: 'mark_research_read', payload: { sessionId: 's1', ts: 999 } }),
+    ).toBe(start);
   });
 });

@@ -19,6 +19,7 @@ import {
   closeSession,
   pinSession,
   unpinSession,
+  markResearchRead,
   setSessionEndListener,
   setSessionDropListener,
   flushAll,
@@ -186,6 +187,25 @@ app.post('/pin', (req, res) => {
   const id = sessionId.trim();
   if (pinned) pinSession(id);
   else unpinSession(id);
+  res.status(200).json({});
+});
+
+// Mark a research briefing as read — persists a `readAt` timestamp so the rail can show "ready to
+// read" (unread, amber) vs "read" (dimmed) honestly across reloads/restarts. Mirrors /pin:
+// write-through, idempotent 200 for unknown ids, no broadcast — the client marks read optimistically
+// and the next snapshot reconciles.
+app.post('/research/read', (req, res) => {
+  const { sessionId, ts } = req.body as { sessionId?: string; ts?: number };
+  if (!sessionId?.trim()) {
+    res.status(400).json({ error: 'sessionId is required' });
+    return;
+  }
+  // Require a finite numeric ts — a missing/NaN ts must not silently no-op as a "marked read".
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) {
+    res.status(400).json({ error: 'ts must be a finite number' });
+    return;
+  }
+  markResearchRead(sessionId.trim(), ts);
   res.status(200).json({});
 });
 

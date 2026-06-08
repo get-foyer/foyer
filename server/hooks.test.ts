@@ -25,14 +25,7 @@ vi.mock('./activity.js', () => ({
 }));
 
 import { handleHook } from './hooks.js';
-import {
-  _resetStateForTest,
-  getAllSessions,
-  getSession,
-  setActivity,
-  closeSession,
-} from './state.js';
-import { isWorkflowVisible } from '../src/types.js';
+import { _resetStateForTest, getAllSessions, getSession, closeSession } from './state.js';
 import { broadcast } from './sse.js';
 import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './providers/internal.js';
 
@@ -431,45 +424,6 @@ describe('handleHook passthrough for genuine events', () => {
       'task',
       expect.objectContaining({ sessionId, prompt: 'Run checks' }),
     );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// ExitPlanMode → plan-mode workflow floor (markPlanned)
-// ---------------------------------------------------------------------------
-
-describe('handleHook ExitPlanMode → workflow floor', () => {
-  it('marks the turn planned so the workflow shows even when the model returns a null graph', async () => {
-    await handleHook(
-      fakeReq({
-        hook_event_name: 'UserPromptSubmit',
-        session_id: 'plan-sess',
-        cwd: '/home/user/project',
-        prompt: 'Build a thing with a plan',
-      }),
-      fakeRes(),
-    );
-    // Agent approves the plan → PreToolUse(ExitPlanMode) → markPlanned for turn 1.
-    await handleHook(
-      fakeReq({
-        hook_event_name: 'PreToolUse',
-        session_id: 'plan-sess',
-        cwd: '/home/user/project',
-        tool_name: 'ExitPlanMode',
-        tool_input: {},
-      }),
-      fakeRes(),
-    );
-    // A summarize tick that draws NO graph still shows the workflow (the plan-mode floor).
-    setActivity('plan-sess', {
-      summary: 'getting started',
-      graph: null,
-      topics: [],
-      turnSeq: 1,
-      turnPrompt: 'Build a thing with a plan',
-      allowAppend: true,
-    });
-    expect(isWorkflowVisible(getSession('plan-sess')!)).toBe(true);
   });
 });
 

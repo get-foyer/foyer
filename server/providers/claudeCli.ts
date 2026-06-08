@@ -21,19 +21,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdtemp, rm } from 'fs/promises';
 import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
-import {
-  stripFences,
-  normalizeTopics,
-  normalizeGraph,
-  RESEARCH_PROMPT,
-  parseResearchSections,
-} from './text.js';
+import { normalizeTopics, RESEARCH_PROMPT, parseResearchSections } from './text.js';
 import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './internal.js';
 
 const execFile = promisify(_execFile);
 
 /**
- * Fast, cheap model for activity summarisation + graph generation.
+ * Fast, cheap model for activity summarisation.
  *
  * The summariser runs frequently (debounced, plus periodic polls), so it is
  * pinned to Haiku to keep cost low — matching the deliberate fast-model choice
@@ -63,15 +57,6 @@ const RESEARCH_MODEL = process.env.FOYER_CLAUDE_CLI_RESEARCH_MODEL ?? 'claude-so
 // eslint-disable-next-line no-control-regex
 const ANSI_SGR = /\x1b\[[0-9;]*m/g;
 
-const GRAPH_PROMPT = (plan: string) =>
-  `Convert the following task plan into a concise Mermaid flowchart.
-Use "graph TD" (top-down) syntax. Output ONLY the mermaid diagram code — no explanation, no markdown fences.
-Wrap every node label in double quotes so that spaces and special characters are handled correctly — for example A["Read file.ts"] instead of A[Read file.ts].
-Keep each node label short (≤ 5 words) so nodes stay compact and readable.
-
-Plan:
-${plan.slice(0, 4000)}`;
-
 export class ClaudeCliProvider implements LlmProvider {
   readonly id = 'claude-cli' as const;
 
@@ -84,19 +69,14 @@ export class ClaudeCliProvider implements LlmProvider {
     }
   }
 
-  async generateGraph(planText: string): Promise<string> {
-    const result = await this.run(GRAPH_PROMPT(planText), []);
-    return stripFences(result);
-  }
-
   async summarizeActivity(
     ctx: ActivityContext,
-  ): Promise<{ summary: string; graph: string | null; topics: SuggestedTopic[] }> {
+  ): Promise<{ summary: string; topics: SuggestedTopic[] }> {
     const { buildActivityPrompt } = await import('./codex.js');
     const prompt = buildActivityPrompt(ctx);
     // Pin to a fast/cheap model — summarisation runs often and doesn't need the
     // user's (potentially Opus-tier) default CLI model. Request JSON output so
-    // we can parse summary + graph reliably.
+    // we can parse summary + topics reliably.
     const raw = await this.run(prompt, ['--model', SUMMARY_MODEL]);
     return parseActivityJson(raw);
   }
@@ -174,7 +154,7 @@ export class ClaudeCliProvider implements LlmProvider {
       // overflow also sets killed/SIGTERM, so guard against mislabeling it as a timeout.
       const ansi = (s?: string) => (s ?? '').replace(ANSI_SGR, '').trim();
       if (e.killed && e.signal === 'SIGTERM' && !e.message?.includes('maxBuffer')) {
-        // Generic wording: run() is shared by generateGraph / summarizeActivity / research.
+        // Generic wording: run() is shared by summarizeActivity / research.
         throw new Error('claude -p timed out after 120s');
       }
       throw new Error(`claude -p failed: ${ansi(e.stderr) || ansi(e.message) || String(err)}`);
@@ -212,13 +192,12 @@ export function buildClaudeArgs(sentinelPrompt: string, extraArgs: string[]): st
 }
 
 /**
- * Parse { summary, graph, topics } from the LLM's JSON output.
+ * Parse { summary, topics } from the LLM's JSON output.
  * Falls back gracefully if JSON is malformed or fields are missing.
  * Shared by ClaudeCliProvider and AnthropicApiProvider.
  */
 export function parseActivityJson(raw: string): {
   summary: string;
-  graph: string | null;
   topics: SuggestedTopic[];
 } {
   // Strip any accidental markdown fences around the JSON
@@ -230,15 +209,12 @@ export function parseActivityJson(raw: string): {
     const parsed = JSON.parse(cleaned) as Record<string, unknown>;
     return {
       summary: typeof parsed.summary === 'string' ? parsed.summary : 'Agent is working…',
-      // null = no workflow warranted this session (trivial work) → dashboard shows no graph region.
-      graph: normalizeGraph(parsed.graph),
       topics: normalizeTopics(parsed.topics),
     };
   } catch {
-    // Unparseable JSON: no structured graph to show → null (no workflow); keep the text as summary.
+    // Unparseable JSON: keep the text as summary, no topics.
     return {
       summary: raw.slice(0, 800) || 'Agent is working…',
-      graph: null,
       topics: [],
     };
   }

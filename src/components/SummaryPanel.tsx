@@ -1,6 +1,5 @@
 import React, { useLayoutEffect, useRef } from 'react';
 import { Markdown } from './Markdown';
-import { WorkflowGraph } from './WorkflowGraph';
 import type { Session, FocusEntry } from '../types';
 
 interface Props {
@@ -12,11 +11,6 @@ interface Props {
   error: string | null;
   /** Lifecycle status of the session — drives the "thinking" state before the first summary arrives. */
   sessionStatus: Session['status'] | null;
-  /** The mermaid `graph LR` storyline to fold in above the narration. Null until one is drawn. */
-  graph: string | null;
-  /** Whether a workflow graph should be shown this turn (hybrid trigger + sticky, decided
-   *  server-side via isWorkflowVisible). When false, no workflow region is rendered at all. */
-  showWorkflow: boolean;
 }
 
 /**
@@ -39,15 +33,7 @@ function groupByTurn(
   return groups;
 }
 
-export function SummaryPanel({
-  summary,
-  focusHistory,
-  status,
-  error,
-  sessionStatus,
-  graph,
-  showWorkflow,
-}: Props) {
+export function SummaryPanel({ summary, focusHistory, status, error, sessionStatus }: Props) {
   // Content exists once the agent has narrated at least once (a retained entry) or a live
   // summary arrived before the first entry was appended (no-append refresh / pre-append tick).
   const hasContent = focusHistory.length > 0 || summary !== null;
@@ -60,24 +46,6 @@ export function SummaryPanel({
           <span className="panel__badge panel__badge--generating">Updating…</span>
         )}
       </h2>
-
-      {/* Workflow storyline, folded in above the narration — shown ONLY when this turn warrants
-          it (multi-phase work or plan mode). A trivial task renders no workflow region at all.
-          `graph` may briefly be null while a warranted graph is still being drawn (e.g. right
-          after plan mode), so we show a one-line "Sketching…" hint rather than empty chrome. */}
-      {showWorkflow && (
-        <div className="summary-panel__workflow">
-          <span className="summary-panel__workflow-label">Workflow</span>
-          {graph ? (
-            <WorkflowGraph graph={graph} />
-          ) : (
-            <div className="summary-panel__workflow-sketching">
-              <span className="spinner spinner--sm" />
-              <span>Sketching workflow…</span>
-            </div>
-          )}
-        </div>
-      )}
 
       {hasContent ? (
         <FocusFeed

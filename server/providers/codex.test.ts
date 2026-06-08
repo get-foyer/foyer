@@ -106,11 +106,9 @@ describe('buildActivityPrompt', () => {
     prompts: [] as string[],
     recentTouchPoints: [] as { path: string; tool: string; ts: number }[],
     transcriptTail: '',
-    previousGraph: null as string | null,
     previousTopics: [] as { topic: string; reason: string }[],
     status: 'working' as 'working' | 'waiting' | 'done',
     waitingReason: null as string | null,
-    planned: false,
   };
 
   it('includes the user prompt in the output', () => {
@@ -141,43 +139,19 @@ describe('buildActivityPrompt', () => {
     expect(result).toContain(tail);
   });
 
-  it('requests JSON output with summary and graph fields', () => {
+  it('requests JSON output with summary and topics fields', () => {
     const result = buildActivityPrompt({ ...baseCtx, prompt: 'Test' });
     expect(result).toMatch(/summary/i);
-    expect(result).toMatch(/graph/i);
+    expect(result).toMatch(/topics/i);
   });
 
-  it('asks for a graph LR milestone storyline, append-only (not a graph TD tool trace)', () => {
+  it('does not ask for a workflow graph', () => {
     const result = buildActivityPrompt({ ...baseCtx, prompt: 'Test' });
-    expect(result).toContain('graph LR');
-    expect(result).not.toContain('graph TD');
-    expect(result).toMatch(/milestone/i);
-    expect(result).toMatch(/append-only/i);
+    expect(result).not.toMatch(/graph LR/i);
+    expect(result).not.toMatch(/:::goal|:::active|classDef/);
   });
 
-  it('lets the model return null when the work does not warrant a graph (not planned)', () => {
-    const result = buildActivityPrompt({ ...baseCtx, prompt: 'Test', planned: false });
-    expect(result).toMatch(/EITHER null/i);
-    expect(result).toMatch(/single-step|trivial|no real phases/i);
-  });
-
-  it('forces a graph (never null) when the agent exited plan mode this turn', () => {
-    const result = buildActivityPrompt({ ...baseCtx, prompt: 'Test', planned: true });
-    expect(result).toMatch(/APPROVED PLAN/i);
-    expect(result).toMatch(/do NOT return null/i);
-  });
-
-  it('embeds the previous storyline so the model extends it instead of redrawing', () => {
-    const prev = 'graph LR\n  G(["Fix login bug"]):::goal --> A["Diagnose"]:::active';
-    const result = buildActivityPrompt({
-      ...baseCtx,
-      prompt: 'Fix login bug',
-      previousGraph: prev,
-    });
-    expect(result).toContain(prev);
-  });
-
-  it('surfaces the waiting reason so the storyline can append a terminal chip', () => {
+  it('surfaces the waiting reason in the status line', () => {
     const result = buildActivityPrompt({
       ...baseCtx,
       prompt: 'Fix login bug',

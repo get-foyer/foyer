@@ -13,7 +13,6 @@ import {
   clearWaiting,
   finishSession,
   getSession,
-  markPlanned,
   markWorking,
 } from './state.js';
 import { broadcast } from './sse.js';
@@ -149,10 +148,9 @@ export async function handleHook(req: Request, res: Response): Promise<void> {
         break;
       case 'PreToolUse':
         if (payload.tool_name === 'ExitPlanMode') {
-          // Agent approved the plan — a planned task is inherently multi-phase, so flag this
-          // turn (hybrid workflow floor) before the immediate summarisation reads it.
+          // Plan presented/approved — clear the plan-approval wait and refresh the focus now
+          // that the agent is about to resume real work.
           clearWaiting(sessionId);
-          markPlanned(sessionId);
           summarizeNow(sessionId);
         } else if (payload.tool_name === 'AskUserQuestion') {
           // Extract the first question text from the `questions` array

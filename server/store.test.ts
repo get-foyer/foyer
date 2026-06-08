@@ -141,16 +141,6 @@ describe('normalizeSession — schema drift', () => {
     expect(s.suggestedTopics).toEqual([]);
   });
 
-  it('defaults workflowTurnSeq to null on a payload persisted before the field existed', () => {
-    const old = { sessionId: 'old', prompt: 'x', status: 'done', startedAt: 1, finishedAt: 2 };
-    expect(normalizeSession(old)!.workflowTurnSeq).toBeNull();
-  });
-
-  it('preserves a persisted workflowTurnSeq', () => {
-    const s = normalizeSession({ sessionId: 'w', prompt: 'p', startedAt: 1, workflowTurnSeq: 3 })!;
-    expect(s.workflowTurnSeq).toBe(3);
-  });
-
   it('returns null for junk input', () => {
     expect(normalizeSession(null)).toBeNull();
     expect(normalizeSession({})).toBeNull();
@@ -193,7 +183,7 @@ describe('applyRetention', () => {
     expect(kept.some((s) => s.sessionId === `s${MAX_SESSIONS + 4}`)).toBe(true);
   });
 
-  it('exempts pinned sessions from the cap so a pin survives restart (ADR 0005)', () => {
+  it('exempts pinned sessions from the cap so a pin survives restart (ADR 0004)', () => {
     const many = Array.from({ length: MAX_SESSIONS + 5 }, (_, i) =>
       mk({ sessionId: `s${i}`, startedAt: i, status: 'done', finishedAt: now }),
     );
