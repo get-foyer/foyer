@@ -359,11 +359,11 @@ export function reducer(state: State, action: Action): State {
     }
 
     case 'research_result': {
-      const { sessionId, topic, summary, links, ts } = action.payload;
+      const { sessionId, topic, lede, sections, links, ts } = action.payload;
       const key = topicKey(topic);
       let patched = updateSession(state, sessionId, (s) => ({
         ...s,
-        research: [{ topic, summary, links, ts }, ...s.research],
+        research: [{ topic, lede, sections, links, ts }, ...s.research],
         // Mirror the server: drop the chip for the topic that just resolved.
         suggestedTopics: s.suggestedTopics.filter((t) => topicKey(t.topic) !== key),
       }));

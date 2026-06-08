@@ -9,7 +9,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { cfg } from '../config.js';
 import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
-import { stripFences } from './text.js';
+import { stripFences, RESEARCH_PROMPT, parseResearchSections } from './text.js';
 
 const GRAPH_PROMPT = (plan: string) =>
   `Convert the following task plan into a concise Mermaid flowchart.
@@ -19,11 +19,6 @@ Keep each node label short (≤ 5 words) so nodes stay compact and readable.
 
 Plan:
 ${plan.slice(0, 8000)}`;
-
-const RESEARCH_PROMPT = (topic: string) =>
-  `Produce a concise research briefing on: "${topic}"
-Search the web for current information. Include: a 2-3 paragraph summary of key findings and cite 5 relevant sources.
-Format sources as a numbered list (title — URL) at the end of your response.`;
 
 export class AnthropicApiProvider implements LlmProvider {
   readonly id = 'anthropic-api' as const;
@@ -86,7 +81,13 @@ export class AnthropicApiProvider implements LlmProvider {
     const client = this.getClient();
 
     type Msg = Anthropic.MessageParam;
-    const messages: Msg[] = [{ role: 'user', content: RESEARCH_PROMPT(topic) }];
+    // Anthropic searches via the model, so it prepends the search instruction to the shared prompt.
+    const messages: Msg[] = [
+      {
+        role: 'user',
+        content: `Search the web for current information.\n\n${RESEARCH_PROMPT(topic)}`,
+      },
+    ];
 
     let finalText = '';
     const links: { title: string; url: string }[] = [];
@@ -155,7 +156,10 @@ export class AnthropicApiProvider implements LlmProvider {
       return true;
     });
 
-    return { summary: finalText || 'No summary returned.', links: deduped };
+    // Citations from the web_search blocks are the authoritative sources (real fetched URLs);
+    // fall back to the model's self-reported sources only if the API surfaced no citations.
+    const { lede, sections, sources } = parseResearchSections(finalText, topic);
+    return { lede, sections, links: deduped.length ? deduped : sources };
   }
 }
 

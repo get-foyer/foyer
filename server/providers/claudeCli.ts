@@ -21,7 +21,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdtemp, rm } from 'fs/promises';
 import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
-import { stripFences, normalizeTopics, normalizeGraph } from './text.js';
+import {
+  stripFences,
+  normalizeTopics,
+  normalizeGraph,
+  RESEARCH_PROMPT,
+  parseResearchSections,
+} from './text.js';
 import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './internal.js';
 
 const execFile = promisify(_execFile);
@@ -44,11 +50,6 @@ Keep each node label short (≤ 5 words) so nodes stay compact and readable.
 
 Plan:
 ${plan.slice(0, 4000)}`;
-
-const RESEARCH_PROMPT = (topic: string) =>
-  `Produce a concise research briefing on: "${topic}"
-Include: a 2-3 paragraph summary, key insights, and cite 5 relevant sources (title + URL).
-Format sources as a numbered list at the end.`;
 
 export class ClaudeCliProvider implements LlmProvider {
   readonly id = 'claude-cli' as const;
@@ -84,8 +85,12 @@ export class ClaudeCliProvider implements LlmProvider {
     // '--output-format json' and run() parses the JSON envelope ({ result }).
     // A second '--output-format' (text) would override it, the CLI would emit
     // plain text, JSON.parse(stdout) would throw, and /research would 500.
+    // The model's `result` is our structured-briefing JSON; parseResearchSections
+    // parses it (with a single-section fallback) and yields the source links too —
+    // this replaces the old text-regex link scraping entirely.
     const result = await this.run(RESEARCH_PROMPT(topic), ['--allowedTools', 'WebSearch,WebFetch']);
-    return parseResearchText(result);
+    const { lede, sections, sources } = parseResearchSections(result, topic);
+    return { lede, sections, links: sources };
   }
 
   private async run(prompt: string, extraArgs: string[]): Promise<string> {
@@ -190,35 +195,4 @@ export function parseActivityJson(raw: string): {
       topics: [],
     };
   }
-}
-
-export function parseResearchText(text: string): ResearchResult {
-  // Extract URLs from the text — the model formats them as a numbered list
-  const urlPattern = /(?:https?:\/\/[^\s)>\]]+)/g;
-  const urlMatches = text.match(urlPattern) ?? [];
-
-  // Try to extract title-URL pairs from "1. Title — URL" or "1. [Title](URL)" patterns
-  const links: { title: string; url: string }[] = [];
-  const numberedPattern = /\d+\.\s+([^\n]+?)\s*—\s*(https?:\/\/\S+)/g;
-  const mdLinkPattern = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
-
-  let match;
-  while ((match = numberedPattern.exec(text)) !== null) {
-    links.push({ title: match[1].trim(), url: match[2].trim() });
-  }
-  while ((match = mdLinkPattern.exec(text)) !== null) {
-    links.push({ title: match[1].trim(), url: match[2].trim() });
-  }
-
-  // Deduplicate by URL
-  const seen = new Set<string>();
-  const dedupedLinks = [...links, ...urlMatches.map((u) => ({ title: u, url: u }))]
-    .filter(({ url }) => {
-      if (seen.has(url)) return false;
-      seen.add(url);
-      return true;
-    })
-    .slice(0, 8);
-
-  return { summary: text, links: dedupedLinks };
 }

@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import {
-  parseResearchText,
-  parseActivityJson,
-  buildClaudeArgs,
-  ClaudeCliProvider,
-} from './claudeCli.js';
+import { parseActivityJson, buildClaudeArgs, ClaudeCliProvider } from './claudeCli.js';
 import { FOYER_INTERNAL_SENTINEL } from './internal.js';
 
 // Capture the argv handed to the (promisified) execFile and control its stdout,
@@ -33,47 +28,8 @@ vi.mock('child_process', async (importOriginal) => {
   };
 });
 
-// ---------------------------------------------------------------------------
-// parseResearchText
-// ---------------------------------------------------------------------------
-
-describe('parseResearchText', () => {
-  it('parses numbered "Title — URL" links', () => {
-    const text = `Summary here.\n\n1. React Docs — https://react.dev\n2. Vite — https://vitejs.dev`;
-    const result = parseResearchText(text);
-    expect(result.links).toHaveLength(2);
-    expect(result.links[0]).toEqual({ title: 'React Docs', url: 'https://react.dev' });
-    expect(result.links[1]).toEqual({ title: 'Vite', url: 'https://vitejs.dev' });
-  });
-
-  it('parses markdown [Title](URL) links', () => {
-    const text = `Summary.\n\n[React Docs](https://react.dev) is useful.`;
-    const result = parseResearchText(text);
-    expect(result.links.some((l) => l.url === 'https://react.dev')).toBe(true);
-  });
-
-  it('deduplicates URLs', () => {
-    const text = `1. React — https://react.dev\n2. React Again — https://react.dev`;
-    const result = parseResearchText(text);
-    const reactLinks = result.links.filter((l) => l.url === 'https://react.dev');
-    expect(reactLinks).toHaveLength(1);
-  });
-
-  it('caps links at 8', () => {
-    const lines = Array.from(
-      { length: 12 },
-      (_, i) => `${i + 1}. Title ${i} — https://example.com/${i}`,
-    );
-    const result = parseResearchText(lines.join('\n'));
-    expect(result.links.length).toBeLessThanOrEqual(8);
-  });
-
-  it('returns the full text as the summary', () => {
-    const text = 'This is the summary text.';
-    const result = parseResearchText(text);
-    expect(result.summary).toBe(text);
-  });
-});
+// parseResearchSections coverage lives in text.test.ts (shared util). claude-cli's research()
+// integration with it is exercised in the ClaudeCliProvider.research block below.
 
 // ---------------------------------------------------------------------------
 // parseActivityJson
@@ -223,16 +179,35 @@ describe('ClaudeCliProvider.research', () => {
     expect(args[args.indexOf('--allowedTools') + 1]).toBe('WebSearch,WebFetch');
   });
 
-  it('parses the JSON envelope into summary + links (does not throw)', async () => {
+  it('parses a structured briefing into lede + sections + links from the JSON `sources`', async () => {
     h.stdout = JSON.stringify({
-      result: 'Summary of findings.\n\n1. React — https://react.dev\n2. Vite — https://vitejs.dev',
+      result: JSON.stringify({
+        lede: 'RSC render on the server.',
+        sections: [{ heading: 'Overview', body: 'They stream a UI description.' }],
+        sources: [
+          { title: 'React', url: 'https://react.dev' },
+          { title: 'Vite', url: 'https://vitejs.dev' },
+        ],
+      }),
     });
     const result = await new ClaudeCliProvider().research('topic');
 
-    expect(result.summary).toContain('Summary of findings.');
+    expect(result.lede).toBe('RSC render on the server.');
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0]).toMatchObject({ heading: 'Overview' });
     expect(result.links).toEqual([
       { title: 'React', url: 'https://react.dev' },
       { title: 'Vite', url: 'https://vitejs.dev' },
     ]);
+  });
+
+  it('falls back to a single section (never throws) when the model returns non-JSON prose', async () => {
+    h.stdout = JSON.stringify({ result: 'Just some prose, not JSON at all.' });
+    const result = await new ClaudeCliProvider().research('My Topic');
+
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0].heading).toBe('My Topic');
+    expect(result.sections[0].body).toContain('Just some prose');
+    expect(result.links).toEqual([]);
   });
 });

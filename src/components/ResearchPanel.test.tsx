@@ -10,8 +10,20 @@ const topics: SuggestedTopic[] = [
 ];
 
 const results: ResearchResult[] = [
-  { topic: 'Caching strategies', summary: 'Body A', links: [], ts: 2000 },
-  { topic: 'Vector databases', summary: 'Body B', links: [], ts: 1000 },
+  {
+    topic: 'Caching strategies',
+    lede: '',
+    sections: [{ heading: '', body: 'Body A' }],
+    links: [],
+    ts: 2000,
+  },
+  {
+    topic: 'Vector databases',
+    lede: '',
+    sections: [{ heading: '', body: 'Body B' }],
+    links: [],
+    ts: 1000,
+  },
 ];
 
 /** Render with a default no-op onOpenResearch unless overridden. */
