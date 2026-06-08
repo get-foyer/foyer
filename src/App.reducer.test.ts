@@ -114,7 +114,7 @@ describe('reducer — research warming (in-flight prefetch ring)', () => {
     const warmed = { ...base, warmingTopics: { s1: ['react rsc'] } };
     const next = reducer(warmed, {
       type: 'research_result',
-      payload: { sessionId: 's1', topic: 'React RSC', summary: 'b', links: [], ts: 1 },
+      payload: { sessionId: 's1', topic: 'React RSC', lede: 'b', sections: [], links: [], ts: 1 },
     });
     expect(next.warmingTopics.s1).toEqual([]);
   });

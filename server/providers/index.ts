@@ -1,11 +1,13 @@
-import type { ResearchLink } from '../../src/types.js';
+import type { ResearchLink, ResearchSection } from '../../src/types.js';
 import type { TouchPoint, SuggestedTopic, SessionStatus } from '../../src/types.js';
 import type { ProviderKind } from '../config.js';
 
 export type { SuggestedTopic };
 
+/** What a provider's research() returns; the route wraps it with `topic` + `ts` to store. */
 export interface ResearchResult {
-  summary: string;
+  lede: string;
+  sections: ResearchSection[];
   links: ResearchLink[];
 }
 

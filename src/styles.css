@@ -833,57 +833,12 @@ body {
   word-break: break-word;
 }
 
-/* Focus history — collapsible "Previously" timeline under Current Focus.
-   `content` stays flex:1 and scrolls; this footer is flex:none and the open
-   timeline scrolls within a capped height so the two never fight for space. */
-.summary-panel__history {
-  border-top: 1px solid var(--border);
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.summary-panel__history-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 14px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--text-dim);
-  font-size: 12px;
-  font-weight: 500;
-  text-align: left;
-  transition: background 0.1s;
-}
-
-.summary-panel__history-toggle:hover {
-  background: var(--surface-2);
-  color: var(--text);
-}
-
-.summary-panel__history-count {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-muted);
-  background: var(--surface-2);
-  border-radius: var(--radius-full);
-  padding: 1px 7px;
-}
-
-.summary-panel__history-chevron {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--text-dim);
-}
-
-.focus-timeline {
-  overflow-y: auto;
-  max-height: 240px;
-  padding-bottom: 6px;
+/* Focus timeline — the continuous chronological transcript inside Current Focus.
+   Oldest at the top, newest pinned at the bottom; this IS the panel's single scroll
+   region (replaces the old latest-big + collapsed "Previously" footer split). */
+.focus-feed {
+  /* override .summary-panel__content's 14px pad — entries + dividers carry their own gutters */
+  padding: 0;
 }
 
 .focus-group {
@@ -916,60 +871,49 @@ body {
   text-overflow: ellipsis;
 }
 
-.focus-card {
-  margin: 0 8px;
-}
-
-.focus-card__header {
-  width: 100%;
+/* One snapshot in the timeline: a tabular-mono timestamp gutter + the narrated summary,
+   always fully rendered (no click-to-expand). The newest entry carries the live amber rule
+   while the agent is working, paired with a "LIVE" label so status is never colour-alone. */
+.focus-entry {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--text);
-  text-align: left;
-  border-radius: var(--radius-sm);
-  transition: background 0.1s;
+  gap: 10px;
+  padding: 8px 14px;
 }
 
-.focus-card__header:hover {
-  background: var(--surface-2);
+.focus-entry--live {
+  box-shadow: inset 2px 0 0 var(--working);
 }
 
-.focus-card__ts {
+.focus-entry__meta {
+  flex: none;
+  width: 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 2px;
+}
+
+.focus-entry__ts {
   font-family: var(--font-mono);
   font-size: 10px;
+  font-variant-numeric: tabular-nums;
   color: var(--text-muted);
-  flex: none;
 }
 
-.focus-card__preview {
+.focus-entry__live {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--working);
+}
+
+.focus-entry__summary {
   flex: 1;
-  font-size: 12px;
-  color: var(--text-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.focus-card__toggle {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--text-dim);
-}
-
-.focus-card__body {
-  padding: 0 6px 8px;
-}
-
-.focus-card__summary {
-  font-size: 13px;
-  line-height: 1.6;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.7;
   color: var(--text);
-  white-space: pre-wrap;
 }
 
 .panel__hint {
@@ -1552,6 +1496,176 @@ body {
   line-height: 1.7;
   color: var(--text);
   max-width: 72ch;
+}
+
+/* Reading head: title on the left, read-time + copy on the right. */
+.research-tab__reading-headline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.research-tab__reading-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.research-tab__readtime {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.research-tab__copy {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  /* Fixed width so the label cycling idle → "Copied ✓" → "Copy failed" doesn't reflow the
+     read-time beside it. */
+  min-width: 11ch;
+  text-align: center;
+}
+
+.research-tab__copy:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* In-doc section index — channel-strip rows that jump to a section (hidden under 2 sections). */
+.research-tab__sections {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 0 24px;
+  max-width: 72ch;
+  border-left: 2px solid var(--border);
+}
+
+.research-tab__section-link {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-left: -2px;
+  padding: 4px 10px;
+  border: none;
+  border-left: 2px solid transparent;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.research-tab__section-link:hover {
+  color: var(--text);
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.research-tab__section-idx {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  color: var(--amber);
+}
+
+/* TL;DR lede — the 2-second gist above the sections. */
+.research-tab__lede {
+  font-size: 16px;
+  line-height: 1.6;
+  font-weight: 500;
+  color: var(--text);
+  max-width: 72ch;
+  margin-bottom: 24px;
+  padding-left: 12px;
+  /* Neutral callout bar — the lede's weight + size carry hierarchy; amber stays signal-only. */
+  border-left: 2px solid var(--border-light);
+}
+
+/* One doc section. scroll-margin so the section-index jump doesn't tuck the heading under the head. */
+.research-tab__section {
+  margin-bottom: 28px;
+  scroll-margin-top: 16px;
+}
+
+.research-tab__section-heading {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  margin-bottom: 8px;
+  max-width: 72ch;
+}
+
+/* Research diagram figure (amber-themed mermaid, untrusted source). */
+.research-figure {
+  margin: 16px 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 14px;
+  background: color-mix(in srgb, var(--amber) 3%, transparent);
+}
+
+.research-figure__svg svg {
+  max-width: none;
+  height: auto;
+}
+
+/* Shared inline error card when a diagram fails to render (workflow or research). */
+.mermaid-view__error {
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* GitHub-flavored markdown tables in research bodies. */
+.markdown table {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown th {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.markdown td {
+  font-variant-numeric: tabular-nums;
 }
 
 .research-tab__sources {

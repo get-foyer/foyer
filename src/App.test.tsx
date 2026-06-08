@@ -368,7 +368,14 @@ describe('reducer — background session updates', () => {
       { type: 'waiting' as const, payload: { sessionId: 'x', reason: 'X' } },
       {
         type: 'research_result' as const,
-        payload: { sessionId: 'x', topic: 'T', summary: 'S', links: [], ts: 0 },
+        payload: {
+          sessionId: 'x',
+          topic: 'T',
+          lede: '',
+          sections: [{ heading: '', body: 'S' }],
+          links: [],
+          ts: 0,
+        },
       },
     ];
     for (const action of actions) {
@@ -620,7 +627,14 @@ describe('reducer — research_result', () => {
     const state = { ...initialState, sessions: [a], activeSessionId: 'a' };
     const next = reducer(state, {
       type: 'research_result',
-      payload: { sessionId: 'a', topic: 'React hooks', summary: 'Summary.', links: [], ts: 3000 },
+      payload: {
+        sessionId: 'a',
+        topic: 'React hooks',
+        lede: '',
+        sections: [{ heading: '', body: 'Summary.' }],
+        links: [],
+        ts: 3000,
+      },
     });
     expect(next.sessions[0].research).toHaveLength(1);
     expect(next.sessions[0].research[0].topic).toBe('React hooks');
@@ -637,7 +651,14 @@ describe('reducer — research_result', () => {
     const state = { ...initialState, sessions: [a], activeSessionId: 'a' };
     const next = reducer(state, {
       type: 'research_result',
-      payload: { sessionId: 'a', topic: 'react HOOKS', summary: 'S', links: [], ts: 3000 },
+      payload: {
+        sessionId: 'a',
+        topic: 'react HOOKS',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
     });
     expect(next.sessions[0].suggestedTopics.map((t) => t.topic)).toEqual(['Mermaid graph LR']);
   });
@@ -647,7 +668,14 @@ describe('reducer — research_result', () => {
     const state = { ...initialState, sessions: [a], activeSessionId: 'a' }; // view defaults to focus
     const next = reducer(state, {
       type: 'research_result',
-      payload: { sessionId: 'a', topic: 'T', summary: 'S', links: [], ts: 3000 },
+      payload: {
+        sessionId: 'a',
+        topic: 'T',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
     });
     expect(next.researchUnseen).toContain('a');
   });
@@ -662,7 +690,14 @@ describe('reducer — research_result', () => {
     };
     const next = reducer(state, {
       type: 'research_result',
-      payload: { sessionId: 'a', topic: 'T', summary: 'S', links: [], ts: 3000 },
+      payload: {
+        sessionId: 'a',
+        topic: 'T',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
     });
     expect(next.researchUnseen).not.toContain('a');
   });
@@ -673,7 +708,14 @@ describe('reducer — research_result', () => {
     const state = { ...initialState, sessions: [a, b], activeSessionId: 'a' };
     const next = reducer(state, {
       type: 'research_result',
-      payload: { sessionId: 'b', topic: 'T', summary: 'S', links: [], ts: 3000 },
+      payload: {
+        sessionId: 'b',
+        topic: 'T',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
     });
     expect(next.researchUnseen).toContain('b');
   });
@@ -1071,7 +1113,14 @@ describe('reducer — primedTopics (prefetch dots)', () => {
     const state = { ...initialState, sessions: [a], primedTopics: { a: ['rsc'] } };
     const next = reducer(state, {
       type: 'research_result',
-      payload: { sessionId: 'a', topic: 'RSC', summary: 's', links: [], ts: 1 },
+      payload: {
+        sessionId: 'a',
+        topic: 'RSC',
+        lede: '',
+        sections: [{ heading: '', body: 's' }],
+        links: [],
+        ts: 1,
+      },
     });
     expect(next.primedTopics.a).toEqual([]);
   });

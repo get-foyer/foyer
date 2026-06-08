@@ -38,11 +38,12 @@ import {
   existsSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import type { Session } from '../src/types.js';
+import type { Session, ResearchResult, ResearchLink, ResearchSection } from '../src/types.js';
 import { newSession } from '../src/types.js';
 
-/** Bumped when the persisted shape changes in a way `normalize()` must account for. */
-export const SESSION_SCHEMA_VERSION = 1;
+/** Bumped when the persisted shape changes in a way `normalize()` must account for.
+ *  v2: research moved from { summary } to { lede, sections[] } — normalizeResearchItem adapts old files. */
+export const SESSION_SCHEMA_VERSION = 2;
 
 /** Retention: keep at most this many sessions on disk (most-recently-started win). */
 export const MAX_SESSIONS = 50;
@@ -89,6 +90,32 @@ function fileFor(sessionsDir: string, sessionId: string): string {
  *   - working/waiting → interrupted (terminal), stamp finishedAt, clear waitingReason.
  *   - a stale `activityStatus: 'generating'` would spin the UI forever → reset to ready/idle.
  */
+/**
+ * Adapt one persisted research item to the current `{ topic, lede, sections[], links, ts }` shape.
+ * Sessions saved before the structured-briefing change carry a flat `summary` string — wrap it as
+ * a single section so old briefings still render as a (minimal) doc. Returns null for junk.
+ */
+export function normalizeResearchItem(raw: unknown): ResearchResult | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const topic = typeof r.topic === 'string' ? r.topic : '';
+  const ts = typeof r.ts === 'number' ? r.ts : Date.now();
+  const links = Array.isArray(r.links) ? (r.links as ResearchLink[]) : [];
+
+  if (Array.isArray(r.sections)) {
+    return {
+      topic,
+      lede: typeof r.lede === 'string' ? r.lede : '',
+      sections: r.sections as ResearchSection[],
+      links,
+      ts,
+    };
+  }
+  // Legacy shape: a single `summary` string → one section.
+  const summary = typeof r.summary === 'string' ? r.summary : '';
+  return { topic, lede: '', sections: [{ heading: topic, body: summary }], links, ts };
+}
+
 export function normalizeSession(raw: unknown): Session | null {
   if (!raw || typeof raw !== 'object') return null;
   const env = raw as Partial<Envelope>;
@@ -113,7 +140,9 @@ export function normalizeSession(raw: unknown): Session | null {
       typeof s.workflowTurnSeq === 'number' ? s.workflowTurnSeq : base.workflowTurnSeq,
     focusHistory: Array.isArray(s.focusHistory) ? s.focusHistory : base.focusHistory,
     touchPoints: Array.isArray(s.touchPoints) ? s.touchPoints : base.touchPoints,
-    research: Array.isArray(s.research) ? s.research : base.research,
+    research: Array.isArray(s.research)
+      ? s.research.map(normalizeResearchItem).filter((r): r is ResearchResult => r !== null)
+      : base.research,
     suggestedTopics: Array.isArray(s.suggestedTopics) ? s.suggestedTopics : base.suggestedTopics,
     // Sessions persisted before pinning existed (or with a malformed value) load as unpinned.
     // Guarding here keeps a non-number out of sortPinnedFirst, where `b - a` would yield NaN.

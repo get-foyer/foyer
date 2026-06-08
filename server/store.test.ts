@@ -6,6 +6,7 @@ import {
   createJsonStore,
   createNoopStore,
   normalizeSession,
+  normalizeResearchItem,
   applyRetention,
   MAX_SESSIONS,
   DONE_TTL_MS,
@@ -213,5 +214,60 @@ describe('createNoopStore', () => {
     expect(store.hydrate()).toEqual([]);
     expect(() => store.delete('x')).not.toThrow();
     expect(() => store.close()).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// research back-compat — sessions persisted before the structured-briefing change
+// carry a flat `summary`; they must load as a single section, not get dropped.
+// ---------------------------------------------------------------------------
+
+describe('normalizeResearchItem (research back-compat)', () => {
+  it('adapts a legacy { summary } item to a single section', () => {
+    const r = normalizeResearchItem({
+      topic: 'RSC',
+      summary: 'Server components stream UI.',
+      links: [{ title: 'react.dev', url: 'https://react.dev' }],
+      ts: 5,
+    });
+    expect(r).toEqual({
+      topic: 'RSC',
+      lede: '',
+      sections: [{ heading: 'RSC', body: 'Server components stream UI.' }],
+      links: [{ title: 'react.dev', url: 'https://react.dev' }],
+      ts: 5,
+    });
+  });
+
+  it('passes through a new { lede, sections } item unchanged', () => {
+    const item = {
+      topic: 'RSC',
+      lede: 'gist',
+      sections: [{ heading: 'Overview', body: 'b' }],
+      links: [],
+      ts: 9,
+    };
+    expect(normalizeResearchItem(item)).toEqual(item);
+  });
+
+  it('returns null for junk', () => {
+    expect(normalizeResearchItem(null)).toBeNull();
+    expect(normalizeResearchItem('nope')).toBeNull();
+  });
+});
+
+describe('normalizeSession — legacy research array', () => {
+  it('adapts an old-shape research array on load', () => {
+    const raw = {
+      sessionId: 's-legacy',
+      prompt: 'task',
+      startedAt: Date.now(),
+      status: 'done',
+      research: [{ topic: 'Old', summary: 'flat blob', links: [], ts: 1 }],
+    };
+    const s = normalizeSession(raw)!;
+    expect(s.research).toHaveLength(1);
+    expect(s.research[0].sections).toEqual([{ heading: 'Old', body: 'flat blob' }]);
+    expect(s.research[0].lede).toBe('');
   });
 });

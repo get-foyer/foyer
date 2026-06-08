@@ -77,7 +77,12 @@ function makeProvider() {
     research,
     inFlight: () => pending.length,
     settle: (topic?: string, over: Partial<ResearchResult> = {}) =>
-      take(topic).resolve({ summary: `briefing`, links: [], ...over }),
+      take(topic).resolve({
+        lede: '',
+        sections: [{ heading: 'briefing', body: 'briefing' }],
+        links: [],
+        ...over,
+      }),
     fail: (topic?: string) => take(topic).reject(new Error('research failed')),
   };
 }
@@ -106,7 +111,7 @@ describe('schedulePrefetch + warm-loop', () => {
 
     const session = getSession('s1')!;
     const result = await resolveAndStoreResearch(session, 'rsc');
-    expect(result.summary).toBe('briefing');
+    expect(result.sections[0].body).toBe('briefing');
     expect(p.research).toHaveBeenCalledTimes(1); // the prefetch, NOT a second live call
     expect(session.research[0].topic).toBe('rsc');
   });
@@ -168,7 +173,13 @@ describe('schedulePrefetch + warm-loop', () => {
   it('#8 skips already-researched and in-flight topics', async () => {
     startSession('s1', 'goal');
     const p = makeProvider();
-    addResearch('s1', { topic: 'done', summary: 'x', links: [], ts: Date.now() });
+    addResearch('s1', {
+      topic: 'done',
+      lede: '',
+      sections: [{ heading: 'done', body: 'x' }],
+      links: [],
+      ts: Date.now(),
+    });
     addResearchInFlight('s1', 'live');
     schedulePrefetch('s1', topics('done', 'live', 'fresh'));
     await flush();
@@ -312,9 +323,9 @@ describe('schedulePrefetch + warm-loop', () => {
     schedulePrefetch('s1', topics('a'));
     await flush(); // a running
     const tapped = takePrefetched('s1', 'a');
-    p.settle('a', { summary: 'shared' });
+    p.settle('a', { sections: [{ heading: 'a', body: 'shared' }] });
     const v = await tapped;
-    expect(v?.summary).toBe('shared');
+    expect(v?.sections[0].body).toBe('shared');
     expect(p.research).toHaveBeenCalledTimes(1);
   });
 

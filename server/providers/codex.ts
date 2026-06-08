@@ -23,7 +23,13 @@ import { readFile, unlink, mkdtemp, rm } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
-import { stripFences, normalizeTopics, normalizeGraph } from './text.js';
+import {
+  stripFences,
+  normalizeTopics,
+  normalizeGraph,
+  RESEARCH_PROMPT,
+  parseResearchSections,
+} from './text.js';
 import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './internal.js';
 
 const execFile = promisify(_execFile);
@@ -119,16 +125,20 @@ ${planText.slice(0, 4000)}`; // cap to avoid huge context
   }
 
   async research(topic: string): Promise<ResearchResult> {
-    const prompt = `Produce a concise research briefing on: "${topic}"
-Include: a 2-3 paragraph summary of current knowledge, key findings, and 5 relevant sources.
-Format the sources at the end as a numbered list with title and URL.`;
-
+    // Keep `--search --json`: search runs as events, the final agent_message carries our
+    // briefing JSON. This deliberately avoids `--output-schema` for research (whose
+    // composition with `--search` is unverified) — parseResearchSections handles the
+    // agent_message text with a single-section fallback.
     const eventsFile = join(tmpdir(), `foyer-research-${Date.now()}.jsonl`);
 
     try {
-      await runCodexWithStdin(prompt, [...FAST_FLAGS, '--search', '--json'], eventsFile);
+      await runCodexWithStdin(
+        RESEARCH_PROMPT(topic),
+        [...FAST_FLAGS, '--search', '--json'],
+        eventsFile,
+      );
 
-      return parseCodexResearchOutput(eventsFile);
+      return parseCodexResearchOutput(eventsFile, topic);
     } finally {
       await unlink(eventsFile).catch(() => {});
     }
@@ -184,11 +194,14 @@ async function runCodexWithStdin(
   }
 }
 
-export async function parseCodexResearchOutput(eventsFile: string): Promise<ResearchResult> {
+export async function parseCodexResearchOutput(
+  eventsFile: string,
+  topic: string,
+): Promise<ResearchResult> {
   const content = await readFile(eventsFile, 'utf-8');
   const lines = content.split('\n').filter(Boolean);
 
-  let summary = '';
+  let agentMessage = '';
   const links: { title: string; url: string }[] = [];
 
   for (const line of lines) {
@@ -197,13 +210,13 @@ export async function parseCodexResearchOutput(eventsFile: string): Promise<Rese
       const item = event.item as Record<string, unknown> | undefined;
       if (!item) continue;
 
-      // Agent message = the briefing text
+      // Agent message = the briefing JSON
       if (item.type === 'agent_message') {
         const content = item.content;
         if (typeof content === 'string') {
-          summary = content;
+          agentMessage = content;
         } else if (Array.isArray(content)) {
-          summary = (content as Array<{ type?: string; text?: string }>)
+          agentMessage = (content as Array<{ type?: string; text?: string }>)
             .filter((c) => c.type === 'text')
             .map((c) => c.text ?? '')
             .join('\n');
@@ -222,16 +235,12 @@ export async function parseCodexResearchOutput(eventsFile: string): Promise<Rese
     }
   }
 
-  // If the final agent message contains URLs in a numbered list, extract them too
-  if (links.length === 0) {
-    const urlPattern = /(?:https?:\/\/[^\s)>\]]+)/g;
-    const found = summary.match(urlPattern) ?? [];
-    for (const url of found) {
-      links.push({ title: url, url });
-    }
-  }
-
-  return { summary: summary || 'No summary returned.', links };
+  // Web-search events are the authoritative sources; fall back to the model's self-reported
+  // `sources` only when the run surfaced no search events.
+  const seen = new Set<string>();
+  const deduped = links.filter(({ url }) => (seen.has(url) ? false : (seen.add(url), true)));
+  const { lede, sections, sources } = parseResearchSections(agentMessage, topic);
+  return { lede, sections, links: deduped.length ? deduped : sources };
 }
 
 export function buildActivityPrompt(ctx: ActivityContext): string {
