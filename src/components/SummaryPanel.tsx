@@ -191,7 +191,13 @@ function FocusFeed({
                   </time>
                   {live && <span className="focus-entry__live">LIVE</span>}
                 </div>
-                <Markdown text={entry.summary} className="focus-entry__summary" />
+                {/* On a no-append refresh, `summary` moves but no new entry is stamped — show the
+                    fresher live text on the live row so it never goes stale (the prop is always >=
+                    focusHistory[0] in freshness). Older rows always render their stored text. */}
+                <Markdown
+                  text={live ? (summary ?? entry.summary) : entry.summary}
+                  className="focus-entry__summary"
+                />
               </article>
             );
           })}

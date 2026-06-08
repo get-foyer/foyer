@@ -673,6 +673,9 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: activeSession.sessionId }),
     });
+    // Intentionally keyed on id/status/topic-set, NOT the whole `activeSession` — this is a one-shot
+    // warm per (session, status, topics); depending on the object would re-fire on every SSE tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSession?.sessionId, activeSession?.status, idleTopicsKey]);
 
   return (
@@ -759,6 +762,7 @@ export default function App() {
               <div className="app__left">
                 <ErrorBoundary>
                   <SummaryPanel
+                    key={activeId ?? 'none'}
                     summary={activeSession?.summary ?? null}
                     focusHistory={activeSession?.focusHistory ?? []}
                     status={activeSession?.activityStatus ?? 'idle'}

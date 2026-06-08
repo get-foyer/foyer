@@ -192,6 +192,17 @@ describe('applyRetention', () => {
     expect(kept.some((s) => s.sessionId === 's0')).toBe(false);
     expect(kept.some((s) => s.sessionId === `s${MAX_SESSIONS + 4}`)).toBe(true);
   });
+
+  it('exempts pinned sessions from the cap so a pin survives restart (ADR 0005)', () => {
+    const many = Array.from({ length: MAX_SESSIONS + 5 }, (_, i) =>
+      mk({ sessionId: `s${i}`, startedAt: i, status: 'done', finishedAt: now }),
+    );
+    many[0].pinnedAt = now; // pin the oldest — it would otherwise be dropped by the newest-N cap
+    const kept = applyRetention(many, now);
+    expect(kept).toHaveLength(MAX_SESSIONS);
+    expect(kept.some((s) => s.sessionId === 's0')).toBe(true); // pinned → retained
+    expect(kept.some((s) => s.sessionId === `s${MAX_SESSIONS + 4}`)).toBe(true);
+  });
 });
 
 describe('createJsonStore — unwritable dir falls back to noop', () => {

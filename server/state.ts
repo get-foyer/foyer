@@ -188,7 +188,9 @@ function pruneLiveSessions(now: number = Date.now()): void {
   for (const s of eligible) {
     const live = s.status === 'working' || s.status === 'waiting';
     const activeVisible = !s.closed && s.sessionId === activeSessionId;
-    if (live || activeVisible) keep.add(s.sessionId);
+    // A pin is an explicit "keep this" from the user — never evict a pinned session from the live
+    // window when over MAX_SESSIONS, or the pin would silently vanish from the sidebar.
+    if (live || activeVisible || s.pinnedAt != null) keep.add(s.sessionId);
   }
   for (const s of [...eligible].sort((a, b) => b.startedAt - a.startedAt)) {
     if (keep.size >= MAX_SESSIONS) break;

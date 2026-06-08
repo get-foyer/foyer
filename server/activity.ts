@@ -149,6 +149,7 @@ export function _resetActivityForTest(): void {
     if (m.transcriptWatcher !== null) m.transcriptWatcher.close();
   }
   meta.clear();
+  livePollInFlight = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +259,9 @@ const STALE_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
 const STALE_CHECK_INTERVAL_MS = 30_000; // check every 30 s
 /** How often the live size-poll checks every working session for transcript growth. */
 const LIVE_POLL_MS = 5_000;
+/** Re-entrancy guard: skip a poll tick if the prior pass is still running (a slow `stat` must not
+ *  let passes pile up and fan out duplicate work). */
+let livePollInFlight = false;
 
 /** A working session that has a known transcript path — the unit both background loops act on. */
 type LiveSession = NonNullable<ReturnType<typeof getSession>>;
@@ -319,17 +323,26 @@ export function startStaleSessionWatcher(): void {
  * Exported for unit tests.
  */
 export async function runLiveSummaryPass(): Promise<void> {
-  for (const { sessionId, m, transcriptPath } of eachWorkingSessionWithTranscript()) {
-    const size = await getTranscriptSize(transcriptPath);
-    if (size === null) continue; // file not present yet — nothing to summarise
-    if (m.lastSummarizedSize !== null && size <= m.lastSummarizedSize) continue; // no growth
-    void run(sessionId);
+  if (livePollInFlight) return; // a prior pass is still running — don't overlap/pile up
+  livePollInFlight = true;
+  try {
+    for (const { sessionId, m, transcriptPath } of eachWorkingSessionWithTranscript()) {
+      const size = await getTranscriptSize(transcriptPath);
+      if (size === null) continue; // file not present yet — nothing to summarise
+      // Exact-equality skip (matches run()'s own guard). Using `<=` would permanently stall the poll
+      // for a session whose transcript ever shrank (rotation/truncation); `===` re-summarises on any change.
+      if (m.lastSummarizedSize !== null && size === m.lastSummarizedSize) continue; // unchanged
+      void run(sessionId);
+    }
+  } finally {
+    livePollInFlight = false;
   }
 }
 
 /** Start the live size-poll (every LIVE_POLL_MS). Call once at server startup. */
 export function startLiveSummaryPoll(): void {
-  setInterval(() => void runLiveSummaryPass(), LIVE_POLL_MS);
+  // unref so the poll interval never keeps the process alive on its own (the HTTP server does).
+  setInterval(() => void runLiveSummaryPass(), LIVE_POLL_MS).unref?.();
 }
 
 // ---------------------------------------------------------------------------

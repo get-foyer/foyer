@@ -150,7 +150,9 @@ app.post('/prefetch', (req, res) => {
   }
 
   const s = getSession(sessionId.trim());
-  if (s) schedulePrefetch(s.sessionId, s.suggestedTopics);
+  // Skip closed (dismissed) sessions — a stale client must not burn provider calls warming a tab
+  // the user already closed.
+  if (s && !s.closed) schedulePrefetch(s.sessionId, s.suggestedTopics);
   res.status(202).json({});
 });
 
@@ -174,6 +176,11 @@ app.post('/pin', (req, res) => {
   const { sessionId, pinned } = req.body as { sessionId?: string; pinned?: boolean };
   if (!sessionId?.trim()) {
     res.status(400).json({ error: 'sessionId is required' });
+    return;
+  }
+  // Require an explicit boolean — a missing/malformed `pinned` must not silently clear a pin.
+  if (typeof pinned !== 'boolean') {
+    res.status(400).json({ error: 'pinned must be a boolean' });
     return;
   }
   const id = sessionId.trim();

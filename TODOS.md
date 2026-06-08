@@ -122,3 +122,36 @@ Deferred work, captured with enough context to pick up cold.
   human / ~25m CC.
 - **Depends on / blocked by:** Session pinning (shipped, ADR 0005). Needs evidence the dashboard is
   actually used on touch devices before it's worth the chrome.
+
+## Cover the reconnect-replay + menu-open paths CI can't reach
+
+- **What:** Add tests for two interaction surfaces the current suite structurally cannot reach:
+  (a) `SessionMenu` open/close + `aria-expanded` mirroring + focus-first + ArrowUp/Down cycling —
+  jsdom has no Popover API (`togglePopover` is undefined), so `SessionTabs.test.tsx` only reaches
+  menu items via `{ hidden: true }`; (b) `server/sse.ts` reconnect replay — there is no `sse.test.ts`,
+  so the `getPrimedTopics`/`getWarmingTopics` re-light loops on connect are emit-untested (the client
+  reducer for those events IS covered in `App.reducer.test.ts`). Also worth a thin `POST /prefetch`
+  and `/pin` route test (400/503/pin-vs-unpin branch).
+- **Why:** These are the glue where a silent regression ships green. The replay is the documented
+  "single source of truth" for re-lighting dots/rings after a reconnect/restart.
+- **Pros:** Closes the two confidence-9 coverage gaps from the pinning/warming review.
+- **Cons:** Popover-in-jsdom needs `togglePopover`/`hidePopover` stubs + a synthetic `toggle` event;
+  some ceremony for a local single-user tool.
+- **Context:** Surfaced by the eng review of this PR (testing specialist). `SessionMenu.tsx:45-79`,
+  `server/sse.ts:31-74`, `server/index.ts` route handlers. ~1-2h human / ~20m CC.
+- **Depends on / blocked by:** None. Pure test addition.
+
+## Popover API fallback for unsupported browsers
+
+- **What:** `SessionMenu` toggles the native Popover imperatively (`popRef.current?.togglePopover?.()`),
+  which silently no-ops where the Popover API is absent — leaving the ⋯ menu (pin/unpin) unopenable.
+  Add a feature-detect (`'popover' in HTMLElement.prototype`) with a JS-toggled `.session-menu`
+  display + manual outside-click/Escape fallback.
+- **Why:** ADR 0005 deliberately bet on Baseline-2026 Popover support, which is correct for the
+  terminal-native user on a current browser — but a hard no-op is a silent dead-end on anything older.
+- **Pros:** Pin/unpin never silently dead; keeps the native path for the common case.
+- **Cons:** Re-implements light-dismiss/focus-return that the platform gives for free; likely
+  over-building unless an unsupported browser actually shows up. Revisit only if it does.
+- **Context:** From the pinning review (frontend specialist). `src/components/SessionMenu.tsx:39-79`.
+  ~2h human / ~25m CC.
+- **Depends on / blocked by:** Session pinning (shipped, ADR 0005).

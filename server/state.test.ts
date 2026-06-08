@@ -124,6 +124,25 @@ describe('getAllSessions', () => {
     expect(ids).not.toContain('s0');
   });
 
+  it('never evicts a pinned session from the live window when over MAX_SESSIONS', () => {
+    hydrateSessions(
+      Array.from({ length: MAX_SESSIONS + 5 }, (_, i) => ({
+        ...newSession(`s${i}`, `task ${i}`, i),
+        status: 'done' as const,
+        finishedAt: Date.now(),
+      })),
+    );
+    // Pin the OLDEST session (startedAt 0) — by the newest-N cap it would be first to go.
+    expect(pinSession('s0')).toBe(true);
+
+    startSession('new-active', 'fresh work');
+
+    const ids = getAllSessions().map((s) => s.sessionId);
+    expect(ids).toHaveLength(MAX_SESSIONS);
+    expect(ids).toContain('s0'); // pinned → survives the cap despite being the oldest
+    expect(ids).toContain('new-active');
+  });
+
   it('prunes expired terminal sessions but preserves old live sessions', () => {
     const now = Date.now();
     hydrateSessions([

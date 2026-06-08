@@ -168,7 +168,14 @@ export function applyRetention(sessions: Session[], now: number): Session[] {
     return now - (s.finishedAt ?? s.startedAt) <= DONE_TTL_MS;
   });
   if (kept.length > MAX_SESSIONS) {
-    kept = [...kept].sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_SESSIONS);
+    // Pinned sessions are user-retained — exempt them from the newest-N cap so a pin survives
+    // restart (ADR 0005), then fill the remaining slots with the newest unpinned sessions.
+    const pinned = kept.filter((s) => s.pinnedAt != null);
+    const rest = kept
+      .filter((s) => s.pinnedAt == null)
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .slice(0, Math.max(0, MAX_SESSIONS - pinned.length));
+    kept = [...pinned, ...rest];
   }
   return kept;
 }

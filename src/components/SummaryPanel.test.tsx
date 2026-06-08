@@ -108,6 +108,22 @@ describe('SummaryPanel', () => {
     expect(live[0].textContent).toContain('now');
   });
 
+  it('shows the fresher live summary on the live row when a no-append refresh outpaced the stored entry', () => {
+    // setActivity always advances `summary` but only stamps a new FocusEntry on real progress; on a
+    // no-append refresh the live text outruns focusHistory[0], so the live row must follow `summary`.
+    renderPanel({
+      sessionStatus: 'working',
+      summary: 'fresh live text',
+      focusHistory: [
+        entry({ id: 'e-2', summary: 'stale newest', ts: 2 }),
+        entry({ id: 'e-1', summary: 'older entry', ts: 1 }),
+      ],
+    });
+    expect(screen.getByText('fresh live text')).toBeTruthy(); // live row follows the prop
+    expect(screen.getByText('older entry')).toBeTruthy(); // older rows keep their stored text
+    expect(screen.queryByText('stale newest')).toBeNull();
+  });
+
   it('marks no entry live once the session is done', () => {
     const { container } = renderPanel({ sessionStatus: 'done', focusHistory: [entry()] });
     expect(container.querySelectorAll('.focus-entry--live').length).toBe(0);
