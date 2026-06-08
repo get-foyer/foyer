@@ -719,6 +719,82 @@ describe('reducer — research_result', () => {
     });
     expect(next.researchUnseen).toContain('b');
   });
+
+  // A WARMED tap (amber dot) returns instantly, so it auto-opens the Research tab on that
+  // briefing instead of merely badging it. Cold/warming taps keep the badge-only behavior above.
+  it('a WARMED (primed) tap on the active session auto-opens its Research tab on the briefing', () => {
+    const a = makeSession({ sessionId: 'a' });
+    const state = {
+      ...initialState,
+      sessions: [a],
+      activeSessionId: 'a', // view defaults to focus
+      primedTopics: { a: ['t'] }, // topicKey('T') === 't'
+    };
+    const next = reducer(state, {
+      type: 'research_result',
+      payload: {
+        sessionId: 'a',
+        topic: 'T',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
+    });
+    expect(next.viewBySession.a).toBe('research');
+    expect(next.selectedResearchBySession.a).toBe(3000);
+    expect(next.sessions[0].research[0].ts).toBe(3000);
+    expect(next.researchUnseen).not.toContain('a'); // opened, so not left unseen
+    expect(next.primedTopics.a).toEqual([]); // dot cleared
+  });
+
+  it('a WARMED tap for a NON-active session does NOT switch the view — it badges (guard)', () => {
+    const a = makeSession({ sessionId: 'a' });
+    const b = makeSession({ sessionId: 'b' });
+    const state = {
+      ...initialState,
+      sessions: [a, b],
+      activeSessionId: 'b', // user has moved on to b
+      primedTopics: { a: ['t'] },
+    };
+    const next = reducer(state, {
+      type: 'research_result',
+      payload: {
+        sessionId: 'a',
+        topic: 'T',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
+    });
+    expect(next.viewBySession.a).not.toBe('research'); // don't yank a view you left
+    expect(next.selectedResearchBySession.a).toBeUndefined();
+    expect(next.researchUnseen).toContain('a'); // badge only
+  });
+
+  it('a WARMED tap selects the NEW briefing even when an older one was open (no stale shadow)', () => {
+    const a = makeSession({ sessionId: 'a' });
+    const state = {
+      ...initialState,
+      sessions: [a],
+      activeSessionId: 'a',
+      primedTopics: { a: ['t'] },
+      selectedResearchBySession: { a: 1 }, // an older briefing was previously open
+    };
+    const next = reducer(state, {
+      type: 'research_result',
+      payload: {
+        sessionId: 'a',
+        topic: 'T',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
+    });
+    expect(next.selectedResearchBySession.a).toBe(3000); // new ts wins, not the stale 1
+  });
 });
 
 // ---------------------------------------------------------------------------

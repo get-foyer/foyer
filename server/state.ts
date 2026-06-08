@@ -429,6 +429,25 @@ export function clearWaiting(sessionId: string): boolean {
   return true;
 }
 
+/**
+ * Marks a known session as actively working again without starting a new turn.
+ *
+ * This is used when lifecycle inference got ahead of the agent (for example a
+ * Stop/auto-close reached us before later tool hooks for the same live turn).
+ * Unlike startSession(), this preserves the existing prompt arc and focus state.
+ */
+export function markWorking(sessionId: string): boolean {
+  const s = sessions.get(sessionId);
+  if (!s) return false;
+  if (s.status !== 'working' || s.waitingReason !== null || s.finishedAt !== null) {
+    s.status = 'working';
+    s.waitingReason = null;
+    s.finishedAt = null;
+    markDirty(sessionId);
+  }
+  return true;
+}
+
 /** Invoked when a session reaches a terminal state (done), so server-only side caches —
  *  research prefetch today — can free per-session state. Injected at boot to keep state.ts
  *  dependency-free: the import direction stays one-way (prefetch → state, never the reverse),
