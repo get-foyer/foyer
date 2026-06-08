@@ -14,6 +14,7 @@ import {
   finishSession,
   getSession,
   markPlanned,
+  markWorking,
 } from './state.js';
 import { broadcast } from './sse.js';
 import {
@@ -228,11 +229,21 @@ async function onUserPrompt(sessionId: string, p: HookPayload): Promise<void> {
 }
 
 async function onPostToolUse(sessionId: string, p: HookPayload): Promise<void> {
-  // Any tool completion clears the waiting state (agent is active again)
+  // Any tool completion proves the agent is active again. This also repairs a stale
+  // terminal state if Stop / transcript auto-close reached us before later hook traffic.
+  // Only revive sessions that are merely waiting or prematurely done — never a tab the
+  // user dismissed (closed) nor a terminal `interrupted` session (crash-recovery, ADR
+  // 0002); a still-running agent's late hooks must not resurrect either of those.
   const s = getSession(sessionId);
-  if (s?.status === 'waiting') {
-    clearWaiting(sessionId);
-    broadcast('task', { sessionId, prompt: s.prompt, prompts: s.prompts, startedAt: s.startedAt });
+  if (s && !s.closed && (s.status === 'waiting' || s.status === 'done')) {
+    markWorking(sessionId);
+    const live = getSession(sessionId) ?? s;
+    broadcast('task', {
+      sessionId,
+      prompt: live.prompt,
+      prompts: live.prompts,
+      startedAt: live.startedAt,
+    });
   }
 
   const toolName = p.tool_name ?? 'unknown';
