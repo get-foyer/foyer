@@ -144,6 +144,9 @@ export function normalizeSession(raw: unknown): Session | null {
       ? s.research.map(normalizeResearchItem).filter((r): r is ResearchResult => r !== null)
       : base.research,
     suggestedTopics: Array.isArray(s.suggestedTopics) ? s.suggestedTopics : base.suggestedTopics,
+    // Sessions persisted before pinning existed (or with a malformed value) load as unpinned.
+    // Guarding here keeps a non-number out of sortPinnedFirst, where `b - a` would yield NaN.
+    pinnedAt: typeof s.pinnedAt === 'number' ? s.pinnedAt : null,
   };
 
   if (merged.status === 'working' || merged.status === 'waiting') {
@@ -165,7 +168,14 @@ export function applyRetention(sessions: Session[], now: number): Session[] {
     return now - (s.finishedAt ?? s.startedAt) <= DONE_TTL_MS;
   });
   if (kept.length > MAX_SESSIONS) {
-    kept = [...kept].sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_SESSIONS);
+    // Pinned sessions are user-retained — exempt them from the newest-N cap so a pin survives
+    // restart (ADR 0005), then fill the remaining slots with the newest unpinned sessions.
+    const pinned = kept.filter((s) => s.pinnedAt != null);
+    const rest = kept
+      .filter((s) => s.pinnedAt == null)
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .slice(0, Math.max(0, MAX_SESSIONS - pinned.length));
+    kept = [...pinned, ...rest];
   }
   return kept;
 }

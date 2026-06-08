@@ -67,3 +67,74 @@ Key files: `server/prefetch.ts` (+ `prefetch.test.ts`), `server/config.ts`, `ser
 (`topicKey`), `server/activity.ts` (`isSummarizing`), `server/index.ts`, `server/sse.ts`,
 `src/types.ts`, `src/App.tsx`, `src/hooks/useSSE.ts`, `src/components/ResearchPanel.tsx`,
 `src/styles.css`.
+
+## Addendum — 2026-06-08: warm in `waiting`/`done`, not just `working`
+
+Extends §2, lifting the accepted limitation in Consequences ("done-session final topics aren't
+warmed … the client stops polling `/activity` when not `working`"). In practice the viewed
+session is usually `waiting` (paused for permission) or `done` — the prime read-window — so
+gating warming on `working` meant the amber dot rarely appeared at all.
+
+Warming is now **decoupled from summarising**. `/activity` still does both for `working`
+sessions (summarising tracks live activity). A new prefetch-only endpoint, `POST /prefetch`,
+runs the warming half _without_ `summarizeNow`; the client fires it one-shot per
+(session, status, topic-set) when it lands on a `waiting`/`done` session that has chips. We did
+not reuse `/activity` for idle sessions on purpose: `run()`'s skip-if-unchanged guard doesn't
+cover sessions with no transcript path, so re-polling `/activity` could re-summarise finished
+work and burn provider calls. Warming itself is unchanged — still idempotent, single-flight,
+top-N-capped, back-off-guarded, and `FOYER_PREFETCH_TOPICS=0` still fully disables it.
+
+Added files/changes: `server/index.ts` (`/prefetch` route), `src/App.tsx` (idle-warm effect).
+
+## Addendum — 2026-06-08: live summarisation via a server-side transcript size-poll
+
+Records a change to the **summarise trigger model** (the other half of the split this ADR drew
+between summarising and warming). Until now, `summariseActivity` fired only on Claude Code hooks
+(`UserPromptSubmit`, `PostToolUse` on `Write|Edit|MultiEdit`, `ExitPlanMode`, `Stop`) or the 30s
+`/activity` poll for the _viewed_ tab. Claude Code emits **no hook for assistant text messages**, so
+when the agent produced a text response (reasoning, explaining, answering) without a file-writing
+tool call, nothing told the server to re-read the transcript — the Current Focus panel froze until
+the next tool call or the coarse viewed-tab poll. Users "stared at old data."
+
+Fix: a 4th trigger — `startLiveSummaryPoll()` in `server/activity.ts`. Every `LIVE_POLL_MS` (5s) it
+iterates all `working` sessions with a known transcript path and, if the transcript file grew since
+the last summary, fires `run()`. It reuses the existing `startStaleSessionWatcher` loop shape
+(factored into a shared `eachWorkingSessionWithTranscript` generator) and `run()`'s existing cost
+guards (skip-if-unchanged, single-flight). A cheap byte-size growth pre-check in the pass guards the
+start-of-session window where the transcript file briefly doesn't exist, so it never fires
+empty-context calls.
+
+Why a poll and not the existing `fs.watch` (`handleTranscriptChange`): an engineering review with a
+Codex outside voice found the watcher too fragile to build a trigger on — `recordTranscriptPath`
+restarts it at EOF on every call (dropping entries written in the gap), it may never start for a
+pure-text turn (no retry if the file is absent at `UserPromptSubmit`), and a trailing debounce can
+starve under continuous writes. The poll sidesteps all three and leaves `fs.watch` as the turn-end /
+ESC-interrupt detector it already is. Consequence: every `working` session now re-summarises on
+transcript growth even when unviewed (consistent with the existing PostToolUse path, and the point of
+a glanceable focus history); bounded by the per-session skip-if-unchanged + single-flight guards.
+
+Added files/changes: `server/activity.ts` (`LIVE_POLL_MS`, `eachWorkingSessionWithTranscript`,
+`runLiveSummaryPass`, `startLiveSummaryPoll`), `server/index.ts` (start the poll),
+`server/activity.test.ts`.
+
+## Addendum — 2026-06-08: surface the in-flight warm (`research_warming`)
+
+Extends §5 ("honest primed signal"). Until now the only client-visible prefetch state was the
+terminal `ready` one (the amber primed dot); the `queued → running → ready` lifecycle never
+surfaced "being pre-fetched right now," so a user watching a chip got no feedback during the
+~20s warm. We now broadcast a `research_warming` SSE event — `{ active: true }` when an entry
+enters `running`, `{ active: false }` when it leaves `running` (success **or** failure/stale),
+so the signal can never get stuck lit. Single-flight means at most one topic is `running`
+server-wide, keeping the signal rare (amber stays "signal, not paint").
+
+The client tracks `warmingTopics` as an exact sibling of `primedTopics` — same
+reset-on-`snapshot` + post-snapshot replay discipline (`getWarmingTopics` injected into
+`sse.ts`, mirroring `getPrimedTopics`). On `research_primed` the client settles the ring into
+the dot atomically (independent of the trailing `active: false`). Visual: a pulsing **hollow
+amber ring** that fills into the solid primed dot — distinct from primed by **shape**, so it
+survives `prefers-reduced-motion` (DESIGN.md decisions-log 2026-06-08).
+
+Added files/changes: `server/prefetch.ts` (`research_warming` broadcasts, `getWarmingTopics`),
+`server/sse.ts` (warming replay), `server/index.ts` (wire `setWarmingTopicsProvider`),
+`src/types.ts` (`SseType`), `src/App.tsx` (`warmingTopics` reducer state),
+`src/components/ResearchPanel.tsx`, `src/styles.css` (`.research-chip__warming`).

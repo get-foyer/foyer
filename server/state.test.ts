@@ -19,13 +19,16 @@ import {
   initPersistence,
   hydrateSessions,
   closeSession,
+  pinSession,
+  unpinSession,
   setSessionEndListener,
+  setSessionDropListener,
   flushAll,
   markPlanned,
 } from './state.js';
 import { MAX_FOCUS, newSession, isWorkflowVisible } from '../src/types.js';
 import type { Session } from '../src/types.js';
-import type { SessionStore } from './store.js';
+import { DONE_TTL_MS, MAX_SESSIONS, type SessionStore } from './store.js';
 
 const topic = (t: string, reason = 'because') => ({ topic: t, reason });
 
@@ -43,6 +46,7 @@ const act = (over: Partial<Parameters<typeof setActivity>[1]> = {}) => ({
 beforeEach(() => {
   _resetStateForTest();
   setSessionEndListener(null); // module-level; reset so listener tests don't bleed
+  setSessionDropListener(null);
 });
 
 // ---------------------------------------------------------------------------
@@ -63,6 +67,14 @@ describe('setSessionEndListener', () => {
     setSessionEndListener((id) => ended.push(id));
     expect(finishSession('nope')).toBe(false);
     expect(ended).toEqual([]);
+  });
+
+  it('does not fire the drop listener on ordinary finish', () => {
+    const dropped: string[] = [];
+    setSessionDropListener((id) => dropped.push(id));
+    startSession('s1', 'work');
+    finishSession('s1');
+    expect(dropped).toEqual([]);
   });
 });
 
@@ -92,6 +104,78 @@ describe('getAllSessions', () => {
     expect(all).toHaveLength(2);
     expect(all.find((s) => s.sessionId === 'a')?.status).toBe('working');
     expect(all.find((s) => s.sessionId === 'b')?.status).toBe('done');
+  });
+
+  it('caps the live in-memory window at MAX_SESSIONS while preserving the newest sessions', () => {
+    hydrateSessions(
+      Array.from({ length: MAX_SESSIONS + 5 }, (_, i) => ({
+        ...newSession(`s${i}`, `task ${i}`, i),
+        status: 'done' as const,
+        finishedAt: Date.now(),
+      })),
+    );
+
+    startSession('new-active', 'fresh work');
+
+    const ids = getAllSessions().map((s) => s.sessionId);
+    expect(ids).toHaveLength(MAX_SESSIONS);
+    expect(ids).toContain('new-active');
+    expect(ids).toContain(`s${MAX_SESSIONS + 4}`);
+    expect(ids).not.toContain('s0');
+  });
+
+  it('never evicts a pinned session from the live window when over MAX_SESSIONS', () => {
+    hydrateSessions(
+      Array.from({ length: MAX_SESSIONS + 5 }, (_, i) => ({
+        ...newSession(`s${i}`, `task ${i}`, i),
+        status: 'done' as const,
+        finishedAt: Date.now(),
+      })),
+    );
+    // Pin the OLDEST session (startedAt 0) — by the newest-N cap it would be first to go.
+    expect(pinSession('s0')).toBe(true);
+
+    startSession('new-active', 'fresh work');
+
+    const ids = getAllSessions().map((s) => s.sessionId);
+    expect(ids).toHaveLength(MAX_SESSIONS);
+    expect(ids).toContain('s0'); // pinned → survives the cap despite being the oldest
+    expect(ids).toContain('new-active');
+  });
+
+  it('prunes expired terminal sessions but preserves old live sessions', () => {
+    const now = Date.now();
+    hydrateSessions([
+      {
+        ...newSession('old-done', 'done', 1),
+        status: 'done' as const,
+        finishedAt: now - DONE_TTL_MS - 1,
+      },
+      { ...newSession('old-working', 'working', 2), status: 'working' as const },
+    ]);
+
+    startSession('new-active', 'fresh work');
+
+    const ids = getAllSessions().map((s) => s.sessionId);
+    expect(ids).toContain('old-working');
+    expect(ids).toContain('new-active');
+    expect(ids).not.toContain('old-done');
+  });
+
+  it('fires the drop listener when retention removes a session from memory', () => {
+    const dropped: string[] = [];
+    setSessionDropListener((id) => dropped.push(id));
+    hydrateSessions([
+      {
+        ...newSession('old-done', 'done', 1),
+        status: 'done' as const,
+        finishedAt: Date.now() - DONE_TTL_MS - 1,
+      },
+    ]);
+
+    startSession('new-active', 'fresh work');
+
+    expect(dropped).toEqual(['old-done']);
   });
 });
 
@@ -626,5 +710,61 @@ describe('persistence wiring', () => {
     expect(getSession('open')?.sessionId).toBe('open');
     expect(getSession('closed')?.closed).toBe(true); // present in the Map
     expect(getAllSessions().map((s) => s.sessionId)).toEqual(['open']); // closed filtered out
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pinSession / unpinSession + pinned-first ordering
+// ---------------------------------------------------------------------------
+
+describe('pinSession / unpinSession', () => {
+  it('pinSession stamps a numeric pinnedAt and lifts the session to the top', () => {
+    startSession('a', 'First');
+    startSession('b', 'Second');
+    startSession('c', 'Third');
+    expect(pinSession('b')).toBe(true);
+    expect(getSession('b')?.pinnedAt).toEqual(expect.any(Number));
+    expect(getAllSessions().map((s) => s.sessionId)).toEqual(['b', 'a', 'c']);
+  });
+
+  it('unpinSession clears pinnedAt and returns the session to insertion order', () => {
+    startSession('a', 'First');
+    startSession('b', 'Second');
+    pinSession('b');
+    expect(unpinSession('b')).toBe(true);
+    expect(getSession('b')?.pinnedAt).toBeNull();
+    expect(getAllSessions().map((s) => s.sessionId)).toEqual(['a', 'b']);
+  });
+
+  it('keeps every pinned session above the unpinned ones', () => {
+    startSession('a', 'First');
+    startSession('b', 'Second');
+    startSession('c', 'Third');
+    pinSession('a');
+    pinSession('c');
+    const ids = getAllSessions().map((s) => s.sessionId);
+    // b is the only unpinned session → it sits last; a and c (pinned) are the top two.
+    expect(ids[2]).toBe('b');
+    expect([...ids.slice(0, 2)].sort()).toEqual(['a', 'c']);
+  });
+
+  it('returns false for an unknown session id', () => {
+    expect(pinSession('ghost')).toBe(false);
+    expect(unpinSession('ghost')).toBe(false);
+  });
+
+  it('flushes immediately on pin so the pin survives a restart', () => {
+    const saved: string[] = [];
+    const recStore: SessionStore = {
+      hydrate: () => [],
+      save: (s) => saved.push(s.sessionId),
+      delete: () => {},
+      close: () => {},
+    };
+    initPersistence(recStore);
+    startSession('a', 'First');
+    saved.length = 0; // ignore the startSession write; isolate the pin's flush
+    pinSession('a');
+    expect(saved).toContain('a');
   });
 });

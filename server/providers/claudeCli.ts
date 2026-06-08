@@ -42,6 +42,27 @@ const execFile = promisify(_execFile);
  */
 const SUMMARY_MODEL = process.env.FOYER_CLAUDE_CLI_SUMMARY_MODEL ?? 'claude-haiku-4-5';
 
+/**
+ * Model for the research briefing.
+ *
+ * Unlike the summariser (high-frequency, trivial → Haiku), research runs only on an explicit tap /
+ * prefetch and its briefing is the thing the user actually reads — synthesis quality matters. Pin
+ * Sonnet: fast enough to finish well inside the timeout while keeping briefings useful. The prior
+ * default was the user's *unpinned* CLI model (often Opus), whose slow WebSearch+WebFetch calls
+ * blew the 90s timeout and surfaced as "claude -p failed". Overridable via
+ * FOYER_CLAUDE_CLI_RESEARCH_MODEL.
+ *
+ * Cross-provider note: codex's analogous lever is model_reasoning_effort, not a model name — see the
+ * deferred "codex research-tier" item in TODOS.md.
+ */
+const RESEARCH_MODEL = process.env.FOYER_CLAUDE_CLI_RESEARCH_MODEL ?? 'claude-sonnet-4-6';
+
+// Matches ANSI SGR colour sequences (e.g. ESC[33m) so we can strip them from CLI stderr before
+// surfacing a failure reason. The literal ESC (\x1b) is the canonical legitimate use of a
+// control-char regex; no-control-regex would otherwise flag it.
+// eslint-disable-next-line no-control-regex
+const ANSI_SGR = /\x1b\[[0-9;]*m/g;
+
 const GRAPH_PROMPT = (plan: string) =>
   `Convert the following task plan into a concise Mermaid flowchart.
 Use "graph TD" (top-down) syntax. Output ONLY the mermaid diagram code — no explanation, no markdown fences.
@@ -85,10 +106,16 @@ export class ClaudeCliProvider implements LlmProvider {
     // '--output-format json' and run() parses the JSON envelope ({ result }).
     // A second '--output-format' (text) would override it, the CLI would emit
     // plain text, JSON.parse(stdout) would throw, and /research would 500.
-    // The model's `result` is our structured-briefing JSON; parseResearchSections
-    // parses it (with a single-section fallback) and yields the source links too —
-    // this replaces the old text-regex link scraping entirely.
-    const result = await this.run(RESEARCH_PROMPT(topic), ['--allowedTools', 'WebSearch,WebFetch']);
+    // Pin research to RESEARCH_MODEL (Sonnet): the prior unpinned default (often Opus) blew the
+    // timeout on slow WebSearch/WebFetch calls. The model's `result` is our structured-briefing
+    // JSON; parseResearchSections parses it (with a single-section fallback) and yields the source
+    // links too — replacing the old text-regex link scraping entirely.
+    const result = await this.run(RESEARCH_PROMPT(topic), [
+      '--model',
+      RESEARCH_MODEL,
+      '--allowedTools',
+      'WebSearch,WebFetch',
+    ]);
     const { lede, sections, sources } = parseResearchSections(result, topic);
     return { lede, sections, links: sources };
   }
@@ -104,8 +131,12 @@ export class ClaudeCliProvider implements LlmProvider {
     // guard in hooks.ts can drop any event that reaches /hook despite layers 1+2.
     const sentinelPrompt = `${FOYER_INTERNAL_SENTINEL}\n${prompt}`;
     try {
-      const { stdout } = await execFile('claude', buildClaudeArgs(sentinelPrompt, extraArgs), {
-        timeout: 90_000,
+      // execFile leaves the child's stdin as an open pipe; claude (v2.1.168+) then waits ~3s for
+      // possible stdin input before proceeding ("no stdin data received in 3s"). We pass the prompt
+      // via -p, never stdin, so close it: the promisified execFile exposes the ChildProcess as
+      // `.child` (documented). EOF → claude skips the wait, no warning, full timeout budget.
+      const p = execFile('claude', buildClaudeArgs(sentinelPrompt, extraArgs), {
+        timeout: 120_000,
         cwd: isolatedDir,
         env: {
           ...process.env,
@@ -117,10 +148,18 @@ export class ClaudeCliProvider implements LlmProvider {
           ANTHROPIC_API_KEY: undefined,
         },
       });
+      p.child?.stdin?.end();
+      const { stdout } = await p;
       const parsed = JSON.parse(stdout) as { result?: string };
       return parsed.result ?? stdout;
     } catch (err) {
-      const e = err as { stdout?: string; stderr?: string; message?: string };
+      const e = err as {
+        stdout?: string;
+        stderr?: string;
+        message?: string;
+        killed?: boolean;
+        signal?: string;
+      };
       // Try to extract result from partial stdout
       if (e.stdout) {
         try {
@@ -130,7 +169,15 @@ export class ClaudeCliProvider implements LlmProvider {
           /* ignore */
         }
       }
-      throw new Error(`claude -p failed: ${e.message ?? String(err)}`);
+      // Surface the real failure reason instead of the raw (ANSI-coloured) stdin warning the old
+      // message used to show. A timeout kills the child with SIGTERM (killed=true); a maxBuffer
+      // overflow also sets killed/SIGTERM, so guard against mislabeling it as a timeout.
+      const ansi = (s?: string) => (s ?? '').replace(ANSI_SGR, '').trim();
+      if (e.killed && e.signal === 'SIGTERM' && !e.message?.includes('maxBuffer')) {
+        // Generic wording: run() is shared by generateGraph / summarizeActivity / research.
+        throw new Error('claude -p timed out after 120s');
+      }
+      throw new Error(`claude -p failed: ${ansi(e.stderr) || ansi(e.message) || String(err)}`);
     } finally {
       await rm(isolatedDir, { recursive: true, force: true });
     }

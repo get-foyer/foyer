@@ -7,7 +7,7 @@ import type {
   FocusEntry,
   SnapshotPayload,
 } from './types';
-import { newSession, MAX_FOCUS, isWorkflowVisible } from './types';
+import { newSession, MAX_FOCUS, isWorkflowVisible, sortPinnedFirst } from './types';
 import { useSSE } from './hooks/useSSE';
 import type { ConnectionStatus } from './hooks/useSSE';
 import { TaskHeader } from './components/TaskHeader';
@@ -49,6 +49,11 @@ type State = {
    *  from `research_primed` SSE events). Reset on every snapshot and rebuilt from the replay, so
    *  a dot can never outlive a server restart / TTL expiry it no longer reflects. */
   primedTopics: Record<string, string[]>;
+  /** Per-session set of topic keys whose research is WARMING (a speculative prefetch is in flight
+   *  server-side) → pulsing amber ring on the chip, which settles into the primed dot when ready.
+   *  Sibling of `primedTopics`: ephemeral, derived from `research_warming` SSE events, reset on
+   *  every snapshot and rebuilt from the replay so a ring can never outlive the warm it reflects. */
+  warmingTopics: Record<string, string[]>;
 };
 
 /** Canonical topic key — must match the server's `topicKey` (trim + lowercase) so primed dots
@@ -88,12 +93,17 @@ type Action =
   | { type: 'select_research'; payload: { sessionId: string; ts: number } }
   /** A suggested topic's research finished warming server-side → light its primed dot. */
   | { type: 'research_primed'; payload: { sessionId: string; topic: string } }
+  /** A suggested topic's research started/stopped warming in the background → toggle its ring. */
+  | { type: 'research_warming'; payload: { sessionId: string; topic: string; active: boolean } }
   /** Focus signal from the server: this session just got a genuine user prompt. */
   | { type: 'active'; payload: { sessionId: string } }
   /** User clicked the FOLLOW control: resume following + jump to the live session. */
   | { type: 'follow' }
   | { type: 'select'; payload: { sessionId: string } }
-  | { type: 'close'; payload: { sessionId: string } };
+  | { type: 'close'; payload: { sessionId: string } }
+  /** Pin a session to the top of the sidebar (optimistic; server persists via POST /pin). */
+  | { type: 'pin'; payload: { sessionId: string } }
+  | { type: 'unpin'; payload: { sessionId: string } };
 
 export const initialState: State = {
   sessions: [],
@@ -106,7 +116,33 @@ export const initialState: State = {
   researchUnseen: [],
   selectedResearchBySession: {},
   primedTopics: {},
+  warmingTopics: {},
 };
+
+export function persistClosedSession(sessionId: string): void {
+  void fetch('/close', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
+    // Closing is optimistic in the UI; keepalive lets this tiny persistence request
+    // finish if the user refreshes or navigates immediately after clicking close.
+    keepalive: true,
+  }).catch(() => {
+    // Best effort: the local tab is already hidden. A future snapshot will reconcile if this fails.
+  });
+}
+
+export function persistPinnedSession(sessionId: string, pinned: boolean): void {
+  void fetch('/pin', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId, pinned }),
+    // Pin/unpin is optimistic in the UI; keepalive lets it finish across an immediate refresh.
+    keepalive: true,
+  }).catch(() => {
+    // Best effort: the local reorder already happened. A future snapshot reconciles if this fails.
+  });
+}
 
 export function isActiveSession(state: State, sessionId: string): boolean {
   return state.activeSessionId === sessionId;
@@ -133,6 +169,19 @@ function updateSession(state: State, sessionId: string, patch: (s: Session) => S
   if (idx === -1) return state;
   const sessions = state.sessions.slice();
   sessions[idx] = patch(sessions[idx]);
+  return { ...state, sessions };
+}
+
+/**
+ * Optimistically set a session's pinnedAt and re-sort the sidebar with the shared rule, so the
+ * row moves the instant you click (the POST /pin persists; the next snapshot reconciles with the
+ * server's authoritative timestamp). Shared by the `pin` and `unpin` cases (DRY).
+ */
+function setPinnedAt(state: State, sessionId: string, value: number | null): State {
+  if (!state.sessions.some((s) => s.sessionId === sessionId)) return state;
+  const sessions = sortPinnedFirst(
+    state.sessions.map((s) => (s.sessionId === sessionId ? { ...s, pinnedAt: value } : s)),
+  );
   return { ...state, sessions };
 }
 
@@ -165,9 +214,10 @@ export function reducer(state: State, action: Action): State {
       const unseenSessionIds = state.unseenSessionIds.filter(
         (id) => ids.has(id) && id !== activeSessionId,
       );
-      // Reset primed dots — the server replays `research_primed` for currently-ready topics
-      // right after this snapshot, so the replay is the single source of truth (no stale dots
-      // surviving a restart / TTL expiry, and closed sessions drop out of the map).
+      // Reset primed/warming dots — the server replays `research_primed` and `research_warming`
+      // for currently-ready/in-flight topics right after this snapshot, so the replay is the
+      // single source of truth (no stale dots surviving a restart / TTL expiry, and closed
+      // sessions drop out of the maps).
       return {
         ...state,
         sessions,
@@ -175,6 +225,7 @@ export function reducer(state: State, action: Action): State {
         liveSessionId,
         unseenSessionIds,
         primedTopics: {},
+        warmingTopics: {},
       };
     }
 
@@ -285,20 +336,23 @@ export function reducer(state: State, action: Action): State {
     case 'activity': {
       const { entry } = action.payload;
       const sessionId = action.payload.sessionId;
-      // Prune primed dots for topics no longer suggested (the chip is gone), mirroring the
-      // server's churn-prune so a dot never points at a vanished chip.
+      // Prune primed/warming dots for topics no longer suggested (the chip is gone), mirroring
+      // the server's churn-prune so a dot never points at a vanished chip. Each prune returns the
+      // SAME map reference when the session has no entries, so unaffected sessions don't churn.
       const stillSuggested = new Set(action.payload.topics.map((t) => topicKey(t.topic)));
-      const priorPrimed = state.primedTopics[sessionId];
+      const pruneVanished = (map: Record<string, string[]>): Record<string, string[]> => {
+        const prior = map[sessionId];
+        if (!prior || prior.length === 0) return map;
+        return { ...map, [sessionId]: prior.filter((k) => stillSuggested.has(k)) };
+      };
+      const prunedPrimed = pruneVanished(state.primedTopics);
+      const prunedWarming = pruneVanished(state.warmingTopics);
+      // Keep the SAME state reference when neither prune changed anything, so an unknown / empty
+      // session stays a no-op (updateSession below also no-ops on a missing session).
       const nextState =
-        priorPrimed && priorPrimed.length > 0
-          ? {
-              ...state,
-              primedTopics: {
-                ...state.primedTopics,
-                [sessionId]: priorPrimed.filter((k) => stillSuggested.has(k)),
-              },
-            }
-          : state;
+        prunedPrimed === state.primedTopics && prunedWarming === state.warmingTopics
+          ? state
+          : { ...state, primedTopics: prunedPrimed, warmingTopics: prunedWarming };
       return updateSession(nextState, sessionId, (s) => {
         // Prepend the server-appended focus entry, de-duped by id (a reconnect snapshot
         // may already carry it, then an in-flight `activity` event re-delivers it). The
@@ -380,6 +434,17 @@ export function reducer(state: State, action: Action): State {
           },
         };
       }
+      // Same for a warming ring — a tap on a still-warming chip lands here once it resolves.
+      const warmingForSession = patched.warmingTopics[sessionId];
+      if (warmingForSession?.includes(key)) {
+        patched = {
+          ...patched,
+          warmingTopics: {
+            ...patched.warmingTopics,
+            [sessionId]: warmingForSession.filter((k) => k !== key),
+          },
+        };
+      }
       // Badge the Research tab unless you're already looking at it for this session. Results
       // only enter `research` on a user tap (prefetch warms a hidden cache, never auto-delivers
       // here), so a landed result always means "the briefing you asked for is ready."
@@ -412,10 +477,38 @@ export function reducer(state: State, action: Action): State {
       const { sessionId, topic } = action.payload;
       const key = topicKey(topic);
       const cur = state.primedTopics[sessionId] ?? [];
-      if (cur.includes(key)) return state; // idempotent (replay may re-deliver)
+      const warming = state.warmingTopics[sessionId];
+      const wasWarming = warming?.includes(key) ?? false;
+      // Idempotent: replay may re-deliver. Already primed AND not warming → nothing to do.
+      if (cur.includes(key) && !wasWarming) return state;
+      // The warm finished → settle the ring into the dot atomically (the server's trailing
+      // research_warming{active:false} would also clear it, but doing it here avoids a flicker).
       return {
         ...state,
-        primedTopics: { ...state.primedTopics, [sessionId]: [...cur, key] },
+        primedTopics: cur.includes(key)
+          ? state.primedTopics
+          : { ...state.primedTopics, [sessionId]: [...cur, key] },
+        warmingTopics: wasWarming
+          ? { ...state.warmingTopics, [sessionId]: warming!.filter((k) => k !== key) }
+          : state.warmingTopics,
+      };
+    }
+
+    case 'research_warming': {
+      const { sessionId, topic, active } = action.payload;
+      const key = topicKey(topic);
+      const cur = state.warmingTopics[sessionId] ?? [];
+      if (active) {
+        if (cur.includes(key)) return state; // idempotent (replay may re-deliver)
+        return {
+          ...state,
+          warmingTopics: { ...state.warmingTopics, [sessionId]: [...cur, key] },
+        };
+      }
+      if (!cur.includes(key)) return state; // already cleared (e.g. by research_primed)
+      return {
+        ...state,
+        warmingTopics: { ...state.warmingTopics, [sessionId]: cur.filter((k) => k !== key) },
       };
     }
 
@@ -444,9 +537,11 @@ export function reducer(state: State, action: Action): State {
       const liveSessionId = state.liveSessionId === sessionId ? fallback : state.liveSessionId;
       // Closing the tab you were holding resumes follow — you're done holding it.
       const followMode = activeWasClosed ? 'follow' : state.followMode;
-      // Drop the closed session's primed dots (server also clears its prefetch cache).
+      // Drop the closed session's primed/warming dots (server also clears its prefetch cache).
       const primedTopics = { ...state.primedTopics };
       delete primedTopics[sessionId];
+      const warmingTopics = { ...state.warmingTopics };
+      delete warmingTopics[sessionId];
       // Spread ...state (D2): a bare literal would silently drop followMode/liveSessionId.
       return {
         ...state,
@@ -457,8 +552,15 @@ export function reducer(state: State, action: Action): State {
         unseenSessionIds,
         closedSessionIds,
         primedTopics,
+        warmingTopics,
       };
     }
+
+    case 'pin':
+      return setPinnedAt(state, action.payload.sessionId, Date.now());
+
+    case 'unpin':
+      return setPinnedAt(state, action.payload.sessionId, null);
 
     default:
       return state;
@@ -509,6 +611,8 @@ export default function App() {
       dispatch({ type: 'research_result', payload: data as P<'research_result'> }),
     research_primed: (data) =>
       dispatch({ type: 'research_primed', payload: data as P<'research_primed'> }),
+    research_warming: (data) =>
+      dispatch({ type: 'research_warming', payload: data as P<'research_warming'> }),
   });
 
   const activeSession = state.sessions.find((s) => s.sessionId === state.activeSessionId) ?? null;
@@ -549,6 +653,31 @@ export default function App() {
     return () => clearInterval(timer);
   }, [activeSession?.sessionId, activeSession?.status]);
 
+  // Warm research for the session you're READING but no longer working — `waiting` (paused for
+  // permission) or `done`. The /activity poll above only fires while `working`, so without this
+  // the prime read-window (you sitting on a paused/finished session with chips on screen) never
+  // warms and the "ready" dot never appears. One-shot per (session, status, topic-set): idle
+  // sessions produce no new activity, so there's nothing to re-poll for; warming is idempotent
+  // server-side and the failure back-off protects a down provider. Hits /prefetch (warm only —
+  // never re-summarises a paused/finished session).
+  const idleTopicsKey =
+    activeSession && (activeSession.status === 'waiting' || activeSession.status === 'done')
+      ? activeSession.suggestedTopics.map((t) => t.topic).join('|')
+      : '';
+  useEffect(() => {
+    if (!activeSession) return;
+    if (activeSession.status !== 'waiting' && activeSession.status !== 'done') return;
+    if (activeSession.suggestedTopics.length === 0) return;
+    void fetch('/prefetch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: activeSession.sessionId }),
+    });
+    // Intentionally keyed on id/status/topic-set, NOT the whole `activeSession` — this is a one-shot
+    // warm per (session, status, topics); depending on the object would re-fire on every SSE tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSession?.sessionId, activeSession?.status, idleTopicsKey]);
+
   return (
     <div className="app">
       <TaskHeader
@@ -587,11 +716,16 @@ export default function App() {
             // Local: drop the tab now. Server: persist a `closed` flag so it stays
             // dismissed across reloads/restarts (snapshot filters closed sessions out).
             dispatch({ type: 'close', payload: { sessionId: id } });
-            void fetch('/close', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ sessionId: id }),
-            });
+            persistClosedSession(id);
+          }}
+          onPin={(id) => {
+            // Optimistic reorder now; persist server-side so the pin survives reload/restart.
+            dispatch({ type: 'pin', payload: { sessionId: id } });
+            persistPinnedSession(id, true);
+          }}
+          onUnpin={(id) => {
+            dispatch({ type: 'unpin', payload: { sessionId: id } });
+            persistPinnedSession(id, false);
           }}
         />
 
@@ -628,6 +762,7 @@ export default function App() {
               <div className="app__left">
                 <ErrorBoundary>
                   <SummaryPanel
+                    key={activeId ?? 'none'}
                     summary={activeSession?.summary ?? null}
                     focusHistory={activeSession?.focusHistory ?? []}
                     status={activeSession?.activityStatus ?? 'idle'}
@@ -648,6 +783,7 @@ export default function App() {
                     results={activeSession?.research ?? []}
                     suggestedTopics={activeSession?.suggestedTopics ?? []}
                     primedTopics={(activeId && state.primedTopics[activeId]) || []}
+                    warmingTopics={(activeId && state.warmingTopics[activeId]) || []}
                     activityStatus={activeSession?.activityStatus ?? 'idle'}
                     sessionId={activeSession?.sessionId ?? null}
                     onOpenResearch={(ts) => {

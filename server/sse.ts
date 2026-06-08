@@ -16,6 +16,17 @@ export function setPrimedTopicsProvider(fn: (sessionId: string) => string[]): vo
   primedTopicsProvider = fn;
 }
 
+/**
+ * Injected getter for a session's currently-warming (in-flight prefetch) topics — same boot-time
+ * wiring as the primed provider, for the same no-import-cycle reason. Lets a reconnecting client
+ * re-light the pulsing "warming" ring for the one topic the warm-loop is mid-research on.
+ */
+let warmingTopicsProvider: ((sessionId: string) => string[]) | null = null;
+
+export function setWarmingTopicsProvider(fn: (sessionId: string) => string[]): void {
+  warmingTopicsProvider = fn;
+}
+
 /** Register a new SSE client. Sends an initial snapshot and sets up cleanup. */
 export function handleSseConnection(req: Request, res: Response): void {
   // SSE headers
@@ -37,6 +48,16 @@ export function handleSseConnection(req: Request, res: Response): void {
     for (const s of sessions) {
       for (const topic of primedTopicsProvider(s.sessionId)) {
         sendTo(res, 'research_primed', { sessionId: s.sessionId, topic });
+      }
+    }
+  }
+
+  // Likewise replay any in-flight warm so the ring re-lights on reconnect. The client clears its
+  // warming set on every snapshot, so this replay (like the primed one) is the source of truth.
+  if (warmingTopicsProvider) {
+    for (const s of sessions) {
+      for (const topic of warmingTopicsProvider(s.sessionId)) {
+        sendTo(res, 'research_warming', { sessionId: s.sessionId, topic, active: true });
       }
     }
   }

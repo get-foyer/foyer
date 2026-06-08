@@ -53,6 +53,8 @@ dot; the client rebuilds its dot set from the reconnect replay so a dot can neve
 - **Mid-research summary overlap.** Yielding is at the boundary only — a summary that starts
   after a research subprocess has spawned will overlap it. Single-flight + short summaries keep
   this to one-vs-one and rare.
-- **Done-session chips don't prefetch.** The client stops polling `/activity` when a session
+- **Done-session chips don't prefetch.** ~~The client stops polling `/activity` when a session
   isn't `working`, so a session's _final_ topics never trigger a warm; those chips fall back to
-  the live path. The feature targets the wait, and the user has returned by the time it's done.
+  the live path.~~ **Resolved 2026-06-08** ([ADR 0003 addendum](decisions/0003-background-research-prefetch.md)):
+  warming is decoupled from summarising — a `waiting` or `done` session with chips warms once via
+  a prefetch-only `POST /prefetch` trigger, so its final topics light up too.

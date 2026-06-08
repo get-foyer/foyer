@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { Session, FocusEntry } from './types';
 import { MAX_FOCUS } from './types';
-import { reducer, initialState, isActiveSession } from './App';
+import { reducer, initialState, isActiveSession, persistClosedSession } from './App';
 
 /** Build a FocusEntry for reducer tests. */
 function makeEntry(over: Partial<FocusEntry> = {}): FocusEntry {
@@ -858,6 +858,23 @@ describe('reducer — close', () => {
       payload: { sessions: [a, b], activeSessionId: 'a' },
     });
     expect(afterSnapshot.sessions.map((s) => s.sessionId)).not.toContain('b');
+  });
+});
+
+describe('persistClosedSession', () => {
+  it('uses a keepalive request so close survives an immediate refresh', () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    persistClosedSession('s1');
+
+    expect(fetchMock).toHaveBeenCalledWith('/close', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 's1' }),
+      keepalive: true,
+    });
+    vi.unstubAllGlobals();
   });
 });
 

@@ -8,6 +8,11 @@ import { FOYER_INTERNAL_SENTINEL } from './internal.js';
 const h = vi.hoisted(() => ({
   calls: [] as { cmd: string; args: string[] }[],
   stdout: '',
+  // When set, the mocked execFile invokes its callback with this error instead of resolving — lets
+  // tests exercise run()'s catch block (timeout / maxBuffer / generic / partial-stdout recovery).
+  error: null as
+    | (Error & { stdout?: string; stderr?: string; killed?: boolean; signal?: string })
+    | null,
 }));
 
 vi.mock('child_process', async (importOriginal) => {
@@ -20,10 +25,11 @@ vi.mock('child_process', async (importOriginal) => {
       cmd: string,
       args: string[],
       _opts: unknown,
-      cb: (err: Error | null, res: { stdout: string; stderr: string }) => void,
+      cb: (err: Error | null, res?: { stdout: string; stderr: string }) => void,
     ) => {
       h.calls.push({ cmd, args });
-      cb(null, { stdout: h.stdout, stderr: '' });
+      if (h.error) cb(h.error);
+      else cb(null, { stdout: h.stdout, stderr: '' });
     },
   };
 });
@@ -158,6 +164,7 @@ describe('ClaudeCliProvider.research', () => {
   beforeEach(() => {
     h.calls.length = 0;
     h.stdout = '';
+    h.error = null;
   });
 
   it('invokes claude with exactly one --output-format (json)', async () => {
@@ -177,6 +184,14 @@ describe('ClaudeCliProvider.research', () => {
 
     const { args } = h.calls[0];
     expect(args[args.indexOf('--allowedTools') + 1]).toBe('WebSearch,WebFetch');
+  });
+
+  it('pins research to the Sonnet model (was unpinned → ran on the slow default)', async () => {
+    h.stdout = JSON.stringify({ result: 'Briefing.' });
+    await new ClaudeCliProvider().research('topic');
+
+    const { args } = h.calls[0];
+    expect(args[args.indexOf('--model') + 1]).toBe('claude-sonnet-4-6');
   });
 
   it('parses a structured briefing into lede + sections + links from the JSON `sources`', async () => {
@@ -209,5 +224,67 @@ describe('ClaudeCliProvider.research', () => {
     expect(result.sections[0].heading).toBe('My Topic');
     expect(result.sections[0].body).toContain('Just some prose');
     expect(result.links).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ClaudeCliProvider run() failure surfacing
+// The catch block used to throw `claude -p failed: ${e.message}`, which on a
+// timeout showed the raw ANSI "no stdin data received in 3s" warning instead of
+// the real reason. These guard the diagnostic catch: timeout → clear message,
+// maxBuffer not mislabeled as a timeout, ANSI stripped, partial-stdout recovered.
+// ---------------------------------------------------------------------------
+
+describe('ClaudeCliProvider.run — failure surfacing', () => {
+  beforeEach(() => {
+    h.calls.length = 0;
+    h.stdout = '';
+    h.error = null;
+  });
+
+  it('surfaces a SIGTERM timeout as a clear message, not the stdin warning', async () => {
+    const err = new Error(
+      'Command failed: claude -p ...[33mWarning: no stdin data received in 3s.[39m',
+    ) as Error & { killed?: boolean; signal?: string };
+    err.killed = true;
+    err.signal = 'SIGTERM';
+    h.error = err;
+
+    await expect(new ClaudeCliProvider().research('topic')).rejects.toThrow(/timed out after 120s/);
+  });
+
+  it('does NOT mislabel a maxBuffer overflow as a timeout', async () => {
+    const err = new Error('stdout maxBuffer length exceeded') as Error & {
+      killed?: boolean;
+      signal?: string;
+    };
+    err.killed = true;
+    err.signal = 'SIGTERM';
+    h.error = err;
+
+    await expect(new ClaudeCliProvider().research('topic')).rejects.toThrow(
+      /claude -p failed: stdout maxBuffer length exceeded/,
+    );
+  });
+
+  it('strips ANSI colour codes from the surfaced failure reason', async () => {
+    const err = new Error('boom') as Error & { stderr?: string };
+    err.stderr = '[31mAPI error: model overloaded[39m';
+    h.error = err;
+
+    // The regex only matches if the escape codes were stripped between "failed: " and "API".
+    await expect(new ClaudeCliProvider().research('topic')).rejects.toThrow(
+      /claude -p failed: API error: model overloaded/,
+    );
+  });
+
+  it('recovers a result from partial stdout on an otherwise-failed call', async () => {
+    const err = new Error('Command failed') as Error & { stdout?: string };
+    err.stdout = JSON.stringify({ result: 'Partial briefing.' });
+    h.error = err;
+
+    const result = await new ClaudeCliProvider().research('topic');
+    // Non-JSON partial stdout → parseResearchSections falls back to a single section.
+    expect(result.sections[0].body).toContain('Partial briefing.');
   });
 });

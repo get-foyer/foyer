@@ -5,3 +5,5 @@ dist/
 .DS_Store
 .gstack/
 package-lock.json
+.claude/scheduled_tasks.lock
+*.foyer-backup

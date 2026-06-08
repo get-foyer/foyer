@@ -20,7 +20,7 @@ pnpm dev
 | Express server (`tsx watch`) | **4317** | Receives Claude Code hooks, SSE stream, research endpoint |
 | Vite dev server              | **5173** | React app with HMR                                        |
 
-**Open the dashboard at `http://localhost:5173`** (not `:4317`, which serves the production build). The Vite proxy forwards `/hook`, `/events`, `/research`, and `/api` to the Express server automatically.
+**Open the dashboard at `http://localhost:5173`** (not `:4317`, which serves the production build). The Vite proxy forwards `/hook`, `/events`, `/research`, `/activity`, `/prefetch`, `/close`, `/pin`, and `/api` to the Express server automatically.
 
 ## Data flow
 

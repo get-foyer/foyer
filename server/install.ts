@@ -143,9 +143,14 @@ export async function uninstallHooks(settingsPath: string, port: number): Promis
 // Codex (TOML config)
 // ---------------------------------------------------------------------------
 
-/** The shim command entry we install for each Codex event. */
-function codexHookCommand(shimPath: string, port: number, event: string): string {
-  return `node ${shimPath} ${port} ${event}`;
+function shellQuoteArg(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** The shim command entry we install for each Codex event.
+ * @internal Exported for tests. */
+export function codexHookCommand(shimPath: string, port: number, event: string): string {
+  return `node ${shellQuoteArg(shimPath)} ${shellQuoteArg(String(port))} ${shellQuoteArg(event)}`;
 }
 
 /**

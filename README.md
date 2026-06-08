@@ -64,6 +64,16 @@ The setup wizard auto-detects what's available and asks which to use.
 
 ---
 
+## Local security model
+
+Foyer Gate is designed to run on your own machine, for your own agent sessions. The Express server binds to `127.0.0.1` only, and the installed hooks call `http://localhost:<port>/hook`.
+
+The local API routes are not authenticated. That is intentional for a localhost developer tool, but it means any process running as your user can talk to the dashboard while it is open. Do not expose the Foyer Gate port with a reverse proxy, tunnel, public bind address, or shared network listener. If you change the server to listen on anything other than loopback, add authentication and firewall rules first.
+
+`.env` is ignored by git and may contain provider credentials when you use the Anthropic API backend.
+
+---
+
 ## How it works
 
 1. `pnpm setup` installs 4 HTTP hooks into your Claude Code `settings.json` (global or project-local, your choice)
@@ -89,7 +99,7 @@ All hooks have a 2-second timeout — if the server is not running, the hook fai
 pnpm dev       # Vite + Express in watch mode (frontend on :5173, API on :4317)
 ```
 
-The Vite dev server proxies `/hook`, `/events`, `/research`, `/api` to the Express server.
+The Vite dev server proxies `/hook`, `/events`, `/research`, `/activity`, `/prefetch`, `/close`, `/pin`, and `/api` to the Express server.
 
 ```bash
 pnpm typecheck  # type-check all source files

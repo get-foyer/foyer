@@ -116,6 +116,10 @@ export interface Session {
   /** User dismissed this tab. Persisted so a closed session stays hidden across restarts
    *  (the snapshot filters these out) without destroying its history on disk. */
   closed?: boolean;
+  /** ms timestamp when the user pinned this session; null/absent = not pinned. Pinned sessions
+   *  sort to the top of the sidebar, most-recently-pinned first (sortPinnedFirst). Server-owned
+   *  and persisted, mirroring `closed` (ADR 0005). */
+  pinnedAt?: number | null;
 }
 
 /** Payload for the `snapshot` SSE event. Carries all known sessions + the server-designated active session. */
@@ -144,7 +148,41 @@ export function newSession(sessionId: string, prompt: string, startedAt: number)
     suggestedTopics: [],
     startedAt,
     finishedAt: null,
+    pinnedAt: null,
   };
+}
+
+/**
+ * Sidebar ordering: pinned sessions first (most-recently-pinned first), then unpinned sessions
+ * in chronological start order (startedAt asc). Pure — returns a new array.
+ *
+ *   pinnedAt: 1030 ┐ pinned, newest pin first
+ *   pinnedAt: 1010 ┘
+ *   ─────────────── (unpinned below, by startedAt)
+ *   startedAt: 100  (started 1st)
+ *   startedAt: 200  (started 2nd)
+ *
+ * Unpinned are ordered by `startedAt`, NOT input position. On the server this matches Map
+ * insertion order (sessions are inserted in startedAt order), so getAllSessions is unchanged.
+ * On the CLIENT it's what makes an optimistic UNPIN correct: the array has been reshuffled by
+ * earlier pins, so a position-based tiebreak would strand a just-unpinned row at the top until
+ * the next snapshot — startedAt drops it straight back to its chronological slot. A captured
+ * index is the final tiebreak so equal-startedAt sessions stay stable across engines. Shared by
+ * server + client so the two orderings can never drift.
+ */
+export function sortPinnedFirst(sessions: Session[]): Session[] {
+  return sessions
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => {
+      const ap = a.s.pinnedAt ?? null;
+      const bp = b.s.pinnedAt ?? null;
+      if (ap !== null && bp !== null) return bp - ap; // both pinned → newest pin first
+      if (ap !== null) return -1; // a pinned, b not
+      if (bp !== null) return 1; // b pinned, a not
+      if (a.s.startedAt !== b.s.startedAt) return a.s.startedAt - b.s.startedAt; // both unpinned
+      return a.i - b.i; // equal startedAt → stable tiebreak
+    })
+    .map(({ s }) => s);
 }
 
 /**
@@ -178,4 +216,7 @@ export type SseType =
   /** A speculative prefetch for a suggested topic just finished warming — the result is cached
    *  server-side (hidden until tapped). Lets the client light a "primed" dot on that chip. */
   | 'research_primed'
+  /** A speculative prefetch is actively in flight (`active: true`) or just left flight
+   *  (`active: false`). Drives the pulsing "warming" ring that settles into the primed dot. */
+  | 'research_warming'
   | 'heartbeat';
