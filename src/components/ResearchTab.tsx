@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import type { ResearchResult } from '../types';
+import type { ResearchResult, SuggestedTopic, Session } from '../types';
 import { Markdown } from './Markdown';
 import { MermaidFigure } from './MermaidFigure';
+import { ResearchChips } from './ResearchChips';
 import { sectionAnchors, estimateReadMinutes, serializeToMarkdown } from '../lib/research';
 
 interface Props {
@@ -10,6 +11,17 @@ interface Props {
   /** The briefing currently shown in the reading pane (controlled by App). */
   selectedTs: number | null;
   onSelect: (ts: number) => void;
+  /** Empty-state launcher inputs — surfaced when the tab has no briefings yet so the action
+   *  (start a briefing) lives on screen, not off in the hidden Focus-view rail. */
+  suggestedTopics: SuggestedTopic[];
+  /** Drives the empty/cold-start copy while topics are being derived. */
+  activityStatus: Session['activityStatus'];
+  /** The viewed session's id — sent with a research request from the empty-state chips. */
+  sessionId: string | null;
+  /** Topic keys (trim+lowercase) whose research is PRIMED → amber "ready" dot on the chip. */
+  primedTopics: string[];
+  /** Topic keys (trim+lowercase) whose research is WARMING → pulsing amber ring on the chip. */
+  warmingTopics: string[];
 }
 
 /**
@@ -19,7 +31,16 @@ interface Props {
  * a diagram where the model judged one warranted, read-time, and copy. Selection is controlled by
  * App so it survives Focus⇄Research toggles.
  */
-export function ResearchTab({ results, selectedTs, onSelect }: Props) {
+export function ResearchTab({
+  results,
+  selectedTs,
+  onSelect,
+  suggestedTopics,
+  activityStatus,
+  sessionId,
+  primedTopics,
+  warmingTopics,
+}: Props) {
   const selected = results.find((r) => r.ts === selectedTs) ?? results[0] ?? null;
 
   const anchors = useMemo(() => (selected ? sectionAnchors(selected.sections) : []), [selected]);
@@ -37,7 +58,12 @@ export function ResearchTab({ results, selectedTs, onSelect }: Props) {
   // Reset the copy affordance when switching briefings.
   useEffect(() => setCopyState('idle'), [selectedTs]);
 
-  // App only mounts this once results exist; stay safe if that ever changes.
+  // No briefings yet → a first-class, status-aware empty state. The Research tab is now always
+  // available (App.tsx gates it on session existence, not briefing count), so this is a real
+  // surface a user lands on — not a defensive fallback. It must give the user an action from
+  // where they stand: the Focus-view Deep Research rail isn't rendered here, so surface the same
+  // launcher inline rather than pointing at off-screen UI. Mirrors ResearchPanel's empty-state
+  // honesty (generating / idle / no-provider); copy is tab-local by design.
   if (!selected) {
     return (
       <div
@@ -46,10 +72,13 @@ export function ResearchTab({ results, selectedTs, onSelect }: Props) {
         id="view-panel-research"
         aria-labelledby="view-tab-research"
       >
-        <div className="panel__empty">
-          <span className="panel__empty-glyph">◱</span>
-          <p>No briefings yet — tap a topic in Deep Research to start reading.</p>
-        </div>
+        <ResearchTabEmpty
+          suggestedTopics={suggestedTopics}
+          activityStatus={activityStatus}
+          sessionId={sessionId}
+          primedTopics={primedTopics}
+          warmingTopics={warmingTopics}
+        />
       </div>
     );
   }
@@ -165,6 +194,68 @@ export function ResearchTab({ results, selectedTs, onSelect }: Props) {
           </section>
         )}
       </article>
+    </div>
+  );
+}
+
+/**
+ * Empty Research tab — shown when the session has no briefings yet. Status-aware, mirroring
+ * ResearchPanel's ResearchEmptyState honesty, but with one critical difference: when topics exist
+ * it surfaces the launcher chips inline so the user can start a briefing from HERE. The Focus-view
+ * Deep Research rail isn't rendered in this view, so a "tap a topic over there" pointer would be a
+ * dead end. Order: topics → chips (the actionable state); otherwise an honest status message.
+ * Copy is tab-local by design (decision D-copy) — the no-provider story is owned by App's banner.
+ */
+function ResearchTabEmpty({
+  suggestedTopics,
+  activityStatus,
+  sessionId,
+  primedTopics,
+  warmingTopics,
+}: {
+  suggestedTopics: SuggestedTopic[];
+  activityStatus: Session['activityStatus'];
+  sessionId: string | null;
+  primedTopics: string[];
+  warmingTopics: string[];
+}) {
+  // Topics present → the launcher is the empty state. Start a briefing without leaving the tab.
+  if (suggestedTopics.length > 0) {
+    return (
+      <div className="research-tab__empty">
+        <span className="panel__empty-glyph" aria-hidden="true">
+          ◱
+        </span>
+        <p className="research-tab__empty-msg">No briefings yet — start one below.</p>
+        <ul className="research-list" aria-label="Suggested research topics">
+          <ResearchChips
+            suggestedTopics={suggestedTopics}
+            sessionId={sessionId}
+            primedTopics={primedTopics}
+            warmingTopics={warmingTopics}
+          />
+        </ul>
+      </div>
+    );
+  }
+
+  // No topics yet → an honest status message (no chips to offer).
+  if (activityStatus === 'generating') {
+    return (
+      <div className="panel__empty" aria-live="polite">
+        <span className="spinner spinner--sm" />
+        <p>Surfacing topics from your session…</p>
+      </div>
+    );
+  }
+  const message =
+    activityStatus === 'ready'
+      ? 'No research topics yet — they’ll appear as the agent works.'
+      : 'Research briefings will open here as you dig into topics.';
+  return (
+    <div className="panel__empty">
+      <span className="panel__empty-glyph">◱</span>
+      <p>{message}</p>
     </div>
   );
 }

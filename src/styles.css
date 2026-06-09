@@ -1,4 +1,4 @@
-/* Foyer Lobby — dashboard styles */
+/* Foyer — dashboard styles */
 
 /* -------------------------------------------------------------------------
    Reset + base
@@ -1309,6 +1309,40 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Empty Research tab WITH suggested topics: glyph + one line + the inline launcher. Constrained
+   width so the full-bleed reading surface doesn't stretch chips edge to edge. The chip list
+   drops its own padding — this block already pads — and the message stays centered. */
+.research-tab__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 460px;
+  padding: 24px 16px;
+}
+
+.research-tab__empty-msg {
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.research-tab__empty .research-list {
+  width: 100%;
+  padding: 0;
+  text-align: left;
+}
+
+/* A failed research request, surfaced as a trailing item inside .research-list (shared by the
+   rail and the empty tab). Inside the already-padded list, so no horizontal padding of its own. */
+.research-list__error {
+  color: var(--red);
+  font-size: 12px;
+  list-style: none;
 }
 
 .research-tab__index {

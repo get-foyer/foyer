@@ -650,12 +650,12 @@ export default function App() {
   const showNoBanner =
     !bannerDismissed && providerStatus !== null && providerStatus.provider === null;
 
-  // View switching (Focus ⇄ Research). The strip appears only once the active session has a
-  // briefing (D5); before that, today's plain Focus layout is unchanged. View is read
-  // per-session and falls back to Focus, so switching/auto-following sessions never strands you
-  // on another session's research (D6).
+  // View switching (Focus ⇄ Research). The strip is always present for an open session: the
+  // Research tab is a first-class destination with its own status-aware empty state, not gated
+  // on having a briefing. View is read per-session and falls back to Focus, so switching/
+  // auto-following sessions never strands you on another session's research (D6).
   const activeId = activeSession?.sessionId ?? null;
-  const showViewTabs = (activeSession?.research.length ?? 0) > 0;
+  const showViewTabs = !!activeSession;
   const view: SessionView =
     showViewTabs && activeId && state.viewBySession[activeId] === 'research' ? 'research' : 'focus';
   const hasUnseenResearch = !!activeId && state.researchUnseen.includes(activeId);
@@ -802,6 +802,11 @@ export default function App() {
                   activeId &&
                   dispatch({ type: 'select_research', payload: { sessionId: activeId, ts } })
                 }
+                suggestedTopics={activeSession.suggestedTopics}
+                activityStatus={activeSession.activityStatus}
+                sessionId={activeSession.sessionId}
+                primedTopics={(activeId && state.primedTopics[activeId]) || []}
+                warmingTopics={(activeId && state.warmingTopics[activeId]) || []}
               />
             </ErrorBoundary>
           ) : (
