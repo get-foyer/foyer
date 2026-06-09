@@ -14,7 +14,7 @@ When you prompt Claude Code or Codex, Foyer hooks into the session and renders a
   </thead>
   <tbody>
     <tr>
-      <td><img src="https://raw.githubusercontent.com/getfoyer/foyer/main/docs/images/focus-tab.png" alt="Foyer — the Focus tab streams a narrated current focus as the agent works" /></td>
+      <td><img src="https://raw.githubusercontent.com/get-foyer/foyer/main/docs/images/focus-tab.png" alt="Foyer — the Focus tab streams a narrated current focus as the agent works" /></td>
     </tr>
   </tbody>
 </table>
@@ -28,8 +28,8 @@ When you prompt Claude Code or Codex, Foyer hooks into the session and renders a
   </thead>
   <tbody>
     <tr>
-      <td><img src="https://raw.githubusercontent.com/getfoyer/foyer/main/docs/images/deep-research-panel.png" alt="Deep Research panel — briefings ready to read and topics to dig into while you wait" /></td>
-      <td><img src="https://raw.githubusercontent.com/getfoyer/foyer/main/docs/images/research-briefing.png" alt="A sourced research briefing rendered in the Research tab" /></td>
+      <td><img src="https://raw.githubusercontent.com/get-foyer/foyer/main/docs/images/deep-research-panel.png" alt="Deep Research panel — briefings ready to read and topics to dig into while you wait" /></td>
+      <td><img src="https://raw.githubusercontent.com/get-foyer/foyer/main/docs/images/research-briefing.png" alt="A sourced research briefing rendered in the Research tab" /></td>
     </tr>
     <tr>
       <td align="center"><em>Briefings ready to read + suggested topics to dig into</em></td>
