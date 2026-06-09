@@ -14,7 +14,7 @@ We already had everything needed to remove that friction:
 
 - `provider.research(topic)` works on all three backends (Codex, Claude CLI, Anthropic API).
 - `summarizeActivity(ctx)` already feeds the agent's prompt, file edits, and transcript tail
-  to the LLM and parses structured JSON (`{summary, graph}`) behind cost guards
+  to the LLM and parses structured JSON (`{summary}`) behind cost guards
   (single-flight, 8s debounce, skip-if-unchanged).
 
 ## Decision
@@ -23,7 +23,7 @@ Derive research topics automatically from the agent's work and present them as c
 chips; remove the manual input box entirely.
 
 1. **Topics ride the existing `summarizeActivity` call.** We widened its output to
-   `{summary, graph, topics}` (`SuggestedTopic = {topic, reason}`) rather than adding a
+   `{summary, topics}` (`SuggestedTopic = {topic, reason}`) rather than adding a
    separate LLM call. Zero extra cost/latency, reuses all orchestration. Topic extraction
    is inference-only — no web search (the web search stays in `research()`).
    - One prompt change (`buildActivityPrompt`) and one shared parser (`normalizeTopics` in

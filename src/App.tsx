@@ -737,7 +737,7 @@ export default function App() {
         <div className="provider-banner" role="alert">
           <span>
             No LLM provider configured — activity summary and research are disabled.{' '}
-            <code>npm run setup</code>
+            <code>foyer setup</code>
           </span>
           <button
             className="provider-banner__dismiss"

@@ -8,6 +8,6 @@
 
 ## Checklist
 
-- [ ] `pnpm ci` passes locally (typecheck + lint + test + build)
+- [ ] `pnpm run ci` passes locally (typecheck + lint + test + build + package smoke)
 - [ ] Tests added or updated for changed behaviour
 - [ ] Docs updated if user-facing behaviour changed

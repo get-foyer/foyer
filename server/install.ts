@@ -147,10 +147,10 @@ function shellQuoteArg(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** The shim command entry we install for each Codex event.
+/** The CLI command entry we install for each Codex event.
  * @internal Exported for tests. */
-export function codexHookCommand(shimPath: string, port: number, event: string): string {
-  return `node ${shellQuoteArg(shimPath)} ${shellQuoteArg(String(port))} ${shellQuoteArg(event)}`;
+export function codexHookCommand(event: string, commandParts: string[] = ['foyer']): string {
+  return [...commandParts, 'hook', 'codex', event].map(shellQuoteArg).join(' ');
 }
 
 /**
@@ -164,8 +164,7 @@ const FOYER_MARKER = 'foyer-lobby-managed';
 
 export async function installCodexHooks(
   configPath: string,
-  shimPath: string,
-  port: number,
+  commandParts: string[] = ['foyer'],
 ): Promise<void> {
   await ensureDir(configPath);
 
@@ -204,8 +203,8 @@ export async function installCodexHooks(
       );
     });
     // Build our entry
-    const command = `${codexHookCommand(shimPath, port, event)} # ${FOYER_MARKER}`;
-    filtered.push({ hooks: [{ type: 'command', command }] });
+    const hookCommand = `${codexHookCommand(event, commandParts)} # ${FOYER_MARKER}`;
+    filtered.push({ hooks: [{ type: 'command', command: hookCommand }] });
     hooks[event] = filtered;
   }
 

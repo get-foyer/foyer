@@ -2,23 +2,20 @@
 /**
  * Foyer Lobby — uninstall hooks.
  *
- * Reads the port from .env (or defaults to 4317) and strips only the hooks
+ * Reads the port from user config (or defaults to 4317) and strips only the hooks
  * that point to http://localhost:<port>/hook. All other hooks are preserved.
  */
 import { input, confirm } from '@inquirer/prompts';
 import { join } from 'path';
 import { homedir } from 'os';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+import { pathToFileURL } from 'url';
 import { uninstallHooks, uninstallCodexHooks } from '../server/install.js';
 import { config as loadDotenv } from 'dotenv';
+import { configPath } from '../server/paths.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = join(__dirname, '..');
+loadDotenv({ path: configPath() });
 
-loadDotenv({ path: join(PROJECT_ROOT, '.env') });
-
-async function main() {
+export async function runUninstall() {
   console.log('\nFoyer Lobby — Uninstall\n');
 
   const port = parseInt(process.env.FOYER_PORT ?? '4317', 10);
@@ -52,12 +49,14 @@ async function main() {
   console.log('\n✅ Hooks removed. The dashboard server can be stopped with Ctrl+C.\n');
 }
 
-main().catch((err: unknown) => {
-  // Clean cancel on Ctrl-C (ExitPromptError from @inquirer/prompts)
-  if (err instanceof Error && err.name === 'ExitPromptError') {
-    console.log('\nUninstall cancelled.\n');
-    process.exit(0);
-  }
-  console.error('\n✗ Uninstall failed:', err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  runUninstall().catch((err: unknown) => {
+    // Clean cancel on Ctrl-C (ExitPromptError from @inquirer/prompts)
+    if (err instanceof Error && err.name === 'ExitPromptError') {
+      console.log('\nUninstall cancelled.\n');
+      process.exit(0);
+    }
+    console.error('\n✗ Uninstall failed:', err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}
