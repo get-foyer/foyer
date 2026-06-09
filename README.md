@@ -1,8 +1,16 @@
-# Foyer
+# Why Foyer?
+This is a post from [HackerNews](https://news.ycombinator.com/item?id=46934404) completely resonated with me
+
+> For me the fatigue is a little different— it’s the constant switching between doing a little bit of work/coding/reviewing and then stopping to wait for the llm to generate something.
+The waits are unpredictable length, so you never know if you should wait or switch to a new task. So you just do something to kill a little time while the machine thinks.
+You never get into a flow state and you feel worn down from this constant vigilance of waiting for background jobs to finish.
+I dont feel more productive, I feel like a lazy babysitter that’s just doing enough to keep the kids from hurting themselves
+
+# What is Foyer?
 
 > Turn the 3–5 minute "agent is working" wait into focused, in-context time.
 
-When you prompt Claude Code or Codex, Foyer hooks into the session and renders a live dashboard: a narrated "current focus" and a deep-research panel for learning while you wait.
+When you prompt Claude Code or Codex, Foyer hooks into the session and renders a dashboard: a narrated "current focus" and a research panel for learning while you wait.
 
 **Core UX principle:** every panel gives you something to think about _in the same mental space as the current task_ — not just a progress bar.
 
@@ -43,10 +51,7 @@ When you prompt Claude Code or Codex, Foyer hooks into the session and renders a
 ## Features
 
 - **Current focus** — a live, narrated summary of what the agent is doing right now, with a per-turn timeline
-- **Plan capture** — the approved plan auto-populates when you exit plan mode (rendered as formatted markdown)
-- **Deep research** — click suggested topics during the wait and get sourced briefings
-- **Connection status** — a Live / Reconnecting / Disconnected badge so you always know if the dashboard is connected
-- **Active provider chip** — shows which LLM backend is in use; banner when none is configured
+- **Deep research** — click suggested topics during the wait and get sourced briefings (some topics are pre-fetched to minimize waiting)
 - **Zero agent slowdown** — all hooks return instantly; nothing blocks the agent
 
 ---
