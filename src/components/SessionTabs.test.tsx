@@ -13,8 +13,6 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     turnSeq: 1,
     summary: null,
     focusHistory: [],
-    graph: null,
-    workflowTurnSeq: null,
     activityStatus: 'idle',
     activityError: null,
     waitingReason: null,
@@ -39,6 +37,8 @@ const baseProps = {
   onFollow: noop,
   onSelect: noop,
   onClose: noop,
+  onPin: noop,
+  onUnpin: noop,
 };
 
 describe('SessionTabs', () => {
@@ -202,5 +202,103 @@ describe('SessionTabs — Jump-to-live pill', () => {
     );
     fireEvent.click(queryPill()!);
     expect(onFollow).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ⋯ options menu + pinning
+// ---------------------------------------------------------------------------
+
+describe('SessionTabs — options menu + pinning', () => {
+  it('renders a ⋯ options trigger per session', () => {
+    render(
+      <SessionTabs
+        {...baseProps}
+        sessions={[makeSession({ sessionId: 'a', prompt: 'Task A' })]}
+        activeSessionId="a"
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: /session options/i });
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+  });
+
+  it('an unpinned session offers "Pin session"; clicking it fires onPin, not onSelect', () => {
+    const onPin = vi.fn();
+    const onSelect = vi.fn();
+    render(
+      <SessionTabs
+        {...baseProps}
+        sessions={[makeSession({ sessionId: 'a', prompt: 'Task A' })]}
+        onPin={onPin}
+        onSelect={onSelect}
+      />,
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: /pin session/i, hidden: true }));
+    expect(onPin).toHaveBeenCalledWith('a');
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('a pinned session offers "Unpin session"; clicking it fires onUnpin', () => {
+    const onUnpin = vi.fn();
+    render(
+      <SessionTabs
+        {...baseProps}
+        sessions={[makeSession({ sessionId: 'a', prompt: 'Task A', pinnedAt: 1000 })]}
+        onUnpin={onUnpin}
+      />,
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: /unpin session/i, hidden: true }));
+    expect(onUnpin).toHaveBeenCalledWith('a');
+  });
+
+  it('a pinned session renders the pin marker with a screen-reader "Pinned" label', () => {
+    render(
+      <SessionTabs
+        {...baseProps}
+        sessions={[makeSession({ sessionId: 'a', prompt: 'Task A', pinnedAt: 1000 })]}
+      />,
+    );
+    expect(screen.getByText('Pinned')).toBeInTheDocument();
+  });
+
+  it('an unpinned session shows no pin marker', () => {
+    render(
+      <SessionTabs {...baseProps} sessions={[makeSession({ sessionId: 'a', prompt: 'Task A' })]} />,
+    );
+    expect(screen.queryByText('Pinned')).not.toBeInTheDocument();
+  });
+
+  it('shows the group divider only when both a pinned and an unpinned session exist', () => {
+    const { rerender } = render(
+      <SessionTabs
+        {...baseProps}
+        sessions={[
+          makeSession({ sessionId: 'p', prompt: 'Pinned', pinnedAt: 1000 }),
+          makeSession({ sessionId: 'u', prompt: 'Unpinned' }),
+        ]}
+      />,
+    );
+    expect(screen.getAllByRole('separator')).toHaveLength(1);
+
+    // all pinned → no divider
+    rerender(
+      <SessionTabs
+        {...baseProps}
+        sessions={[
+          makeSession({ sessionId: 'p1', prompt: 'P1', pinnedAt: 1000 }),
+          makeSession({ sessionId: 'p2', prompt: 'P2', pinnedAt: 2000 }),
+        ]}
+      />,
+    );
+    expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+
+    // none pinned → no divider
+    rerender(
+      <SessionTabs
+        {...baseProps}
+        sessions={[makeSession({ sessionId: 'a' }), makeSession({ sessionId: 'b' })]}
+      />,
+    );
+    expect(screen.queryByRole('separator')).not.toBeInTheDocument();
   });
 });

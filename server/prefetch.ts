@@ -232,6 +232,19 @@ export function getPrimedTopics(sessionId: string): string[] {
   return out;
 }
 
+/** Currently-`running` topics for a session (original text) — the speculative research actually
+ *  in flight. Used by the SSE reconnect replay to re-light the warming ring, mirroring
+ *  {@link getPrimedTopics} (injected into sse.ts so sse.ts never imports this module). */
+export function getWarmingTopics(sessionId: string): string[] {
+  const m = cache.get(sessionId);
+  if (!m) return [];
+  const out: string[] = [];
+  for (const e of m.values()) {
+    if (e.status === 'running') out.push(e.topic);
+  }
+  return out;
+}
+
 /**
  * The global single-flight warm-loop. Serves the active (viewed) session's queue, one research
  * at a time, yielding while a live summary holds the provider.
@@ -265,6 +278,9 @@ async function runLoop(): Promise<void> {
       }
 
       entry.status = 'running';
+      // Surface the in-progress warm to the client (the pulsing "warming" ring). Single-flight
+      // means at most one topic is `running` server-wide, so this signal stays rare.
+      broadcast('research_warming', { sessionId: sid, topic: entry.topic, active: true });
       counters.attempted++;
       const provider = getActiveProvider();
       let result: ProviderResearchResult | null = null;
@@ -291,6 +307,10 @@ async function runLoop(): Promise<void> {
         }
         counters.wasted++; // failed, or a stale success we must discard
       }
+      // Always end the warming signal when leaving `running` (success OR failure/stale/drop) so
+      // the ring can never get stuck lit. On success the client also got `research_primed`; the
+      // two touch independent client sets, so order is irrelevant.
+      broadcast('research_warming', { sessionId: sid, topic: entry.topic, active: false });
     }
   } finally {
     loopRunning = false;

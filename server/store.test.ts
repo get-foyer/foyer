@@ -6,6 +6,7 @@ import {
   createJsonStore,
   createNoopStore,
   normalizeSession,
+  normalizeResearchItem,
   applyRetention,
   MAX_SESSIONS,
   DONE_TTL_MS,
@@ -140,16 +141,6 @@ describe('normalizeSession — schema drift', () => {
     expect(s.suggestedTopics).toEqual([]);
   });
 
-  it('defaults workflowTurnSeq to null on a payload persisted before the field existed', () => {
-    const old = { sessionId: 'old', prompt: 'x', status: 'done', startedAt: 1, finishedAt: 2 };
-    expect(normalizeSession(old)!.workflowTurnSeq).toBeNull();
-  });
-
-  it('preserves a persisted workflowTurnSeq', () => {
-    const s = normalizeSession({ sessionId: 'w', prompt: 'p', startedAt: 1, workflowTurnSeq: 3 })!;
-    expect(s.workflowTurnSeq).toBe(3);
-  });
-
   it('returns null for junk input', () => {
     expect(normalizeSession(null)).toBeNull();
     expect(normalizeSession({})).toBeNull();
@@ -191,6 +182,17 @@ describe('applyRetention', () => {
     expect(kept.some((s) => s.sessionId === 's0')).toBe(false);
     expect(kept.some((s) => s.sessionId === `s${MAX_SESSIONS + 4}`)).toBe(true);
   });
+
+  it('exempts pinned sessions from the cap so a pin survives restart (ADR 0004)', () => {
+    const many = Array.from({ length: MAX_SESSIONS + 5 }, (_, i) =>
+      mk({ sessionId: `s${i}`, startedAt: i, status: 'done', finishedAt: now }),
+    );
+    many[0].pinnedAt = now; // pin the oldest — it would otherwise be dropped by the newest-N cap
+    const kept = applyRetention(many, now);
+    expect(kept).toHaveLength(MAX_SESSIONS);
+    expect(kept.some((s) => s.sessionId === 's0')).toBe(true); // pinned → retained
+    expect(kept.some((s) => s.sessionId === `s${MAX_SESSIONS + 4}`)).toBe(true);
+  });
 });
 
 describe('createJsonStore — unwritable dir falls back to noop', () => {
@@ -213,5 +215,60 @@ describe('createNoopStore', () => {
     expect(store.hydrate()).toEqual([]);
     expect(() => store.delete('x')).not.toThrow();
     expect(() => store.close()).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// research back-compat — sessions persisted before the structured-briefing change
+// carry a flat `summary`; they must load as a single section, not get dropped.
+// ---------------------------------------------------------------------------
+
+describe('normalizeResearchItem (research back-compat)', () => {
+  it('adapts a legacy { summary } item to a single section', () => {
+    const r = normalizeResearchItem({
+      topic: 'RSC',
+      summary: 'Server components stream UI.',
+      links: [{ title: 'react.dev', url: 'https://react.dev' }],
+      ts: 5,
+    });
+    expect(r).toEqual({
+      topic: 'RSC',
+      lede: '',
+      sections: [{ heading: 'RSC', body: 'Server components stream UI.' }],
+      links: [{ title: 'react.dev', url: 'https://react.dev' }],
+      ts: 5,
+    });
+  });
+
+  it('passes through a new { lede, sections } item unchanged', () => {
+    const item = {
+      topic: 'RSC',
+      lede: 'gist',
+      sections: [{ heading: 'Overview', body: 'b' }],
+      links: [],
+      ts: 9,
+    };
+    expect(normalizeResearchItem(item)).toEqual(item);
+  });
+
+  it('returns null for junk', () => {
+    expect(normalizeResearchItem(null)).toBeNull();
+    expect(normalizeResearchItem('nope')).toBeNull();
+  });
+});
+
+describe('normalizeSession — legacy research array', () => {
+  it('adapts an old-shape research array on load', () => {
+    const raw = {
+      sessionId: 's-legacy',
+      prompt: 'task',
+      startedAt: Date.now(),
+      status: 'done',
+      research: [{ topic: 'Old', summary: 'flat blob', links: [], ts: 1 }],
+    };
+    const s = normalizeSession(raw)!;
+    expect(s.research).toHaveLength(1);
+    expect(s.research[0].sections).toEqual([{ heading: 'Old', body: 'flat blob' }]);
+    expect(s.research[0].lede).toBe('');
   });
 });

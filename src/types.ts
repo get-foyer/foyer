@@ -11,11 +11,30 @@ export interface ResearchLink {
   url: string;
 }
 
+/**
+ * One section of a documentation-style research briefing. `body` is GitHub-flavored
+ * markdown (prose, lists, tables); `diagram` is optional raw Mermaid source rendered as a
+ * figure under the body. A trivial topic comes back as a single section (no manufactured
+ * structure) — see the adaptive rule in the research prompt.
+ */
+export interface ResearchSection {
+  heading: string;
+  body: string;
+  diagram?: string;
+}
+
 export interface ResearchResult {
   topic: string;
-  summary: string;
+  /** 1-2 sentence TL;DR shown above the sections so the glance-reader gets the gist first. */
+  lede: string;
+  /** Ordered doc sections; always >= 1. */
+  sections: ResearchSection[];
   links: ResearchLink[];
   ts: number;
+  /** ms timestamp when the user first opened this briefing; null/undefined = unread.
+   *  Server-owned, mirroring `pinnedAt` (ADR 0004). Drives the rail's "ready to read" (unread,
+   *  amber) vs "read" (dimmed, no amber) split so amber stays a rare live/ready signal. */
+  readAt?: number | null;
 }
 
 /** Max focus-history entries retained per session (shared by the server cap and the
@@ -77,16 +96,6 @@ export interface Session {
   summary: string | null;
   /** Retained narrated focus snapshots, newest-first, capped at MAX_FOCUS. `summary` is `focusHistory[0]`. */
   focusHistory: FocusEntry[];
-  /** Mermaid `graph LR` milestone storyline, populated asynchronously after activity summarization.
-   *  Content is session-spanning and monotonic — a later trivial tick never nulls a real storyline. */
-  graph: string | null;
-  /**
-   * turnSeq for which a workflow graph should be SHOWN (folded into Current Focus). Visibility is
-   * `workflowTurnSeq === turnSeq` (see {@link isWorkflowVisible}): it goes stale automatically on a
-   * new turn, so the workflow is re-decided fresh each prompt yet stays sticky within a turn. Null
-   * until the first tick where the work warrants a graph (multi-phase) or the agent exited plan mode.
-   */
-  workflowTurnSeq: number | null;
   activityStatus: 'idle' | 'generating' | 'ready' | 'error';
   activityError: string | null;
   touchPoints: TouchPoint[];
@@ -101,6 +110,10 @@ export interface Session {
   /** User dismissed this tab. Persisted so a closed session stays hidden across restarts
    *  (the snapshot filters these out) without destroying its history on disk. */
   closed?: boolean;
+  /** ms timestamp when the user pinned this session; null/absent = not pinned. Pinned sessions
+   *  sort to the top of the sidebar, most-recently-pinned first (sortPinnedFirst). Server-owned
+   *  and persisted, mirroring `closed` (ADR 0004). */
+  pinnedAt?: number | null;
 }
 
 /** Payload for the `snapshot` SSE event. Carries all known sessions + the server-designated active session. */
@@ -120,8 +133,6 @@ export function newSession(sessionId: string, prompt: string, startedAt: number)
     turnSeq: 1,
     summary: null,
     focusHistory: [],
-    graph: null,
-    workflowTurnSeq: null,
     activityStatus: 'idle',
     activityError: null,
     touchPoints: [],
@@ -129,20 +140,41 @@ export function newSession(sessionId: string, prompt: string, startedAt: number)
     suggestedTopics: [],
     startedAt,
     finishedAt: null,
+    pinnedAt: null,
   };
 }
 
 /**
- * Whether the workflow graph should be shown for this session right now.
+ * Sidebar ordering: pinned sessions first (most-recently-pinned first), then unpinned sessions
+ * in chronological start order (startedAt asc). Pure — returns a new array.
  *
- * Visibility is turn-scoped: the server stamps `workflowTurnSeq` with the turn for which a
- * workflow was warranted (multi-phase work, or the agent exited plan mode). Comparing it to the
- * live `turnSeq` makes the graph sticky WITHIN a turn (later trivial ticks don't hide it) but
- * re-decided fresh on the NEXT prompt (the bump makes the stamp stale). Graph CONTENT
- * (`session.graph`) is independent and session-spanning — this only governs the readout.
+ *   pinnedAt: 1030 ┐ pinned, newest pin first
+ *   pinnedAt: 1010 ┘
+ *   ─────────────── (unpinned below, by startedAt)
+ *   startedAt: 100  (started 1st)
+ *   startedAt: 200  (started 2nd)
+ *
+ * Unpinned are ordered by `startedAt`, NOT input position. On the server this matches Map
+ * insertion order (sessions are inserted in startedAt order), so getAllSessions is unchanged.
+ * On the CLIENT it's what makes an optimistic UNPIN correct: the array has been reshuffled by
+ * earlier pins, so a position-based tiebreak would strand a just-unpinned row at the top until
+ * the next snapshot — startedAt drops it straight back to its chronological slot. A captured
+ * index is the final tiebreak so equal-startedAt sessions stay stable across engines. Shared by
+ * server + client so the two orderings can never drift.
  */
-export function isWorkflowVisible(s: Session): boolean {
-  return s.workflowTurnSeq != null && s.workflowTurnSeq === s.turnSeq;
+export function sortPinnedFirst(sessions: Session[]): Session[] {
+  return sessions
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => {
+      const ap = a.s.pinnedAt ?? null;
+      const bp = b.s.pinnedAt ?? null;
+      if (ap !== null && bp !== null) return bp - ap; // both pinned → newest pin first
+      if (ap !== null) return -1; // a pinned, b not
+      if (bp !== null) return 1; // b pinned, a not
+      if (a.s.startedAt !== b.s.startedAt) return a.s.startedAt - b.s.startedAt; // both unpinned
+      return a.i - b.i; // equal startedAt → stable tiebreak
+    })
+    .map(({ s }) => s);
 }
 
 // SSE event types the server pushes to the browser
@@ -163,4 +195,7 @@ export type SseType =
   /** A speculative prefetch for a suggested topic just finished warming — the result is cached
    *  server-side (hidden until tapped). Lets the client light a "primed" dot on that chip. */
   | 'research_primed'
+  /** A speculative prefetch is actively in flight (`active: true`) or just left flight
+   *  (`active: false`). Drives the pulsing "warming" ring that settles into the primed dot. */
+  | 'research_warming'
   | 'heartbeat';

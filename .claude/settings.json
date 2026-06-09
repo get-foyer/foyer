@@ -25,7 +25,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit",
+        "matcher": "Write|Edit|MultiEdit|AskUserQuestion",
         "hooks": [
           {
             "type": "http",

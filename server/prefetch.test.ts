@@ -26,6 +26,7 @@ import {
   clearPrefetch,
   notifyResearchSuccess,
   getPrimedTopics,
+  getWarmingTopics,
   resolveAndStoreResearch,
   getPrefetchStats,
   _resetPrefetchForTest,
@@ -62,9 +63,8 @@ function makeProvider() {
   const provider = {
     id: 'codex',
     isAvailable: async () => true,
-    generateGraph: async () => '',
     research,
-    summarizeActivity: async () => ({ summary: '', graph: '', topics: [] }),
+    summarizeActivity: async () => ({ summary: '', topics: [] }),
   } as unknown as LlmProvider;
   setActiveProvider(provider);
   const take = (topic?: string): Pending => {
@@ -76,7 +76,12 @@ function makeProvider() {
     research,
     inFlight: () => pending.length,
     settle: (topic?: string, over: Partial<ResearchResult> = {}) =>
-      take(topic).resolve({ summary: `briefing`, links: [], ...over }),
+      take(topic).resolve({
+        lede: '',
+        sections: [{ heading: 'briefing', body: 'briefing' }],
+        links: [],
+        ...over,
+      }),
     fail: (topic?: string) => take(topic).reject(new Error('research failed')),
   };
 }
@@ -105,7 +110,7 @@ describe('schedulePrefetch + warm-loop', () => {
 
     const session = getSession('s1')!;
     const result = await resolveAndStoreResearch(session, 'rsc');
-    expect(result.summary).toBe('briefing');
+    expect(result.sections[0].body).toBe('briefing');
     expect(p.research).toHaveBeenCalledTimes(1); // the prefetch, NOT a second live call
     expect(session.research[0].topic).toBe('rsc');
   });
@@ -115,7 +120,6 @@ describe('schedulePrefetch + warm-loop', () => {
     makeProvider();
     setActivity('s1', {
       summary: 's',
-      graph: 'g',
       topics: topics('rsc', 'vite'),
       turnSeq: 1,
       turnPrompt: 'goal',
@@ -167,7 +171,13 @@ describe('schedulePrefetch + warm-loop', () => {
   it('#8 skips already-researched and in-flight topics', async () => {
     startSession('s1', 'goal');
     const p = makeProvider();
-    addResearch('s1', { topic: 'done', summary: 'x', links: [], ts: Date.now() });
+    addResearch('s1', {
+      topic: 'done',
+      lede: '',
+      sections: [{ heading: 'done', body: 'x' }],
+      links: [],
+      ts: Date.now(),
+    });
     addResearchInFlight('s1', 'live');
     schedulePrefetch('s1', topics('done', 'live', 'fresh'));
     await flush();
@@ -311,10 +321,62 @@ describe('schedulePrefetch + warm-loop', () => {
     schedulePrefetch('s1', topics('a'));
     await flush(); // a running
     const tapped = takePrefetched('s1', 'a');
-    p.settle('a', { summary: 'shared' });
+    p.settle('a', { sections: [{ heading: 'a', body: 'shared' }] });
     const v = await tapped;
-    expect(v?.summary).toBe('shared');
+    expect(v?.sections[0].body).toBe('shared');
     expect(p.research).toHaveBeenCalledTimes(1);
+  });
+
+  it('#19 warming broadcast: active:true when running, active:false on completion', async () => {
+    startSession('s1', 'goal');
+    const p = makeProvider();
+    schedulePrefetch('s1', topics('rsc'));
+    await flush(); // rsc is now running
+    expect(vi.mocked(broadcast)).toHaveBeenCalledWith('research_warming', {
+      sessionId: 's1',
+      topic: 'rsc',
+      active: true,
+    });
+    // The end signal hasn't fired yet — research is still in flight.
+    expect(vi.mocked(broadcast)).not.toHaveBeenCalledWith('research_warming', {
+      sessionId: 's1',
+      topic: 'rsc',
+      active: false,
+    });
+    p.settle('rsc');
+    await flush();
+    expect(vi.mocked(broadcast)).toHaveBeenCalledWith('research_warming', {
+      sessionId: 's1',
+      topic: 'rsc',
+      active: false,
+    });
+  });
+
+  it('#20 warming ends (active:false) even when the research fails — no stuck ring', async () => {
+    startSession('s1', 'goal');
+    const p = makeProvider();
+    schedulePrefetch('s1', topics('rsc'));
+    await flush();
+    p.fail('rsc');
+    await flush();
+    expect(vi.mocked(broadcast)).toHaveBeenCalledWith('research_warming', {
+      sessionId: 's1',
+      topic: 'rsc',
+      active: false,
+    });
+    expect(vi.mocked(broadcast)).not.toHaveBeenCalledWith('research_primed', expect.anything());
+  });
+
+  it('#21 getWarmingTopics reports the in-flight topic, cleared once it completes', async () => {
+    startSession('s1', 'goal');
+    const p = makeProvider();
+    schedulePrefetch('s1', topics('rsc'));
+    await flush();
+    expect(getWarmingTopics('s1')).toEqual(['rsc']); // running
+    p.settle('rsc');
+    await flush();
+    expect(getWarmingTopics('s1')).toEqual([]); // now ready, not warming
+    expect(getPrimedTopics('s1')).toEqual(['rsc']);
   });
 });
 

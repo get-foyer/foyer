@@ -5,9 +5,9 @@ import type {
   SuggestedTopic,
   FocusEntry,
 } from '../src/types.js';
-import { newSession, MAX_FOCUS } from '../src/types.js';
+import { newSession, MAX_FOCUS, sortPinnedFirst } from '../src/types.js';
 import { normalizeWhitespace } from './providers/text.js';
-import { createNoopStore, type SessionStore } from './store.js';
+import { createNoopStore, DONE_TTL_MS, MAX_SESSIONS, type SessionStore } from './store.js';
 
 export type { Session };
 
@@ -120,33 +120,6 @@ export function isResearchInFlight(sessionId: string, topic: string): boolean {
   return inFlightResearch.get(sessionId)?.has(topicKey(topic)) ?? false;
 }
 
-// ---------------------------------------------------------------------------
-// Plan-mode marker (ephemeral, server-only)
-//
-// Records the turnSeq at which the agent exited plan mode (the ExitPlanMode hook).
-// Like inFlightResearch above, it is deliberately NOT on the Session object: the
-// signal only matters for the LIVE turn (it forces the workflow graph on via the
-// hybrid trigger in setActivity), and a server restart demotes the session to
-// `interrupted` (terminal), so there is nothing to restore. Cleared on finish/close
-// so it stays bounded by active sessions.
-//
-//   ExitPlanMode hook ──► markPlanned(id) ──► plannedTurn[id] = turnSeq
-//                                                  │
-//   setActivity / run() ──► isPlannedTurn(id, turnSeq) ◄┘  (hybrid workflow floor)
-// ---------------------------------------------------------------------------
-const plannedTurn = new Map<string, number>();
-
-/** Record that the agent exited plan mode on the session's CURRENT turn. */
-export function markPlanned(sessionId: string): void {
-  const s = sessions.get(sessionId);
-  if (s) plannedTurn.set(sessionId, s.turnSeq);
-}
-
-/** Whether ExitPlanMode fired for `turnSeq` on this session — the hybrid workflow-visibility floor. */
-export function isPlannedTurn(sessionId: string, turnSeq: number): boolean {
-  return plannedTurn.get(sessionId) === turnSeq;
-}
-
 export function getActiveSessionId(): string | null {
   return activeSessionId;
 }
@@ -159,10 +132,58 @@ export function getSession(id: string): Session | null {
   return sessions.get(id) ?? null;
 }
 
-/** Returns all visible sessions in insertion (start) order — working/done/interrupted.
- *  Closed sessions are filtered out (they stay on disk + in the Map but are hidden from the UI). */
+/** Returns all visible sessions — working/done/interrupted — pinned first (most-recently-pinned
+ *  first), then unpinned in insertion (start) order. Closed sessions are filtered out (they stay
+ *  on disk + in the Map but are hidden from the UI). The Map yields insertion order, which
+ *  sortPinnedFirst preserves as the unpinned tiebreak. */
 export function getAllSessions(): Session[] {
-  return [...sessions.values()].filter((s) => !s.closed);
+  return sortPinnedFirst([...sessions.values()].filter((s) => !s.closed));
+}
+
+function pruneLiveSessions(now: number = Date.now()): void {
+  const candidates = [...sessions.values()];
+  if (candidates.length <= MAX_SESSIONS) {
+    for (const s of candidates) {
+      const terminal = s.status === 'done' || s.status === 'interrupted';
+      if (terminal && now - (s.finishedAt ?? s.startedAt) > DONE_TTL_MS) {
+        dropSessionFromMemory(s.sessionId);
+      }
+    }
+    return;
+  }
+
+  const eligible = candidates.filter((s) => {
+    const terminal = s.status === 'done' || s.status === 'interrupted';
+    return !terminal || now - (s.finishedAt ?? s.startedAt) <= DONE_TTL_MS;
+  });
+  const keep = new Set<string>();
+
+  for (const s of eligible) {
+    const live = s.status === 'working' || s.status === 'waiting';
+    const activeVisible = !s.closed && s.sessionId === activeSessionId;
+    // A pin is an explicit "keep this" from the user — never evict a pinned session from the live
+    // window when over MAX_SESSIONS, or the pin would silently vanish from the sidebar.
+    if (live || activeVisible || s.pinnedAt != null) keep.add(s.sessionId);
+  }
+  for (const s of [...eligible].sort((a, b) => b.startedAt - a.startedAt)) {
+    if (keep.size >= MAX_SESSIONS) break;
+    keep.add(s.sessionId);
+  }
+
+  for (const s of candidates) {
+    if (!keep.has(s.sessionId)) dropSessionFromMemory(s.sessionId);
+  }
+}
+
+function dropSessionFromMemory(sessionId: string): void {
+  sessions.delete(sessionId);
+  dirty.delete(sessionId);
+  inFlightResearch.delete(sessionId);
+  sessionDropListener?.(sessionId);
+  if (activeSessionId === sessionId) {
+    const visible = [...sessions.values()].filter((s) => !s.closed);
+    activeSessionId = visible.length > 0 ? visible[visible.length - 1].sessionId : null;
+  }
 }
 
 /**
@@ -178,7 +199,6 @@ export function resolveResearchSession(sessionId: string | null | undefined): Se
 export function _resetStateForTest(): void {
   sessions.clear();
   inFlightResearch.clear();
-  plannedTurn.clear();
   activeSessionId = null;
   dirty.clear();
   if (flushTimer) {
@@ -186,6 +206,8 @@ export function _resetStateForTest(): void {
     flushTimer = null;
   }
   store = createNoopStore();
+  sessionEndListener = null;
+  sessionDropListener = null;
 }
 
 /** Max prompts retained per session. Beyond this, the goal (prompts[0]) and the most
@@ -197,7 +219,7 @@ const MAX_PROMPTS = 100;
  *
  * Claude Code reuses one stable session_id across every turn of a session, so a follow-up
  * prompt must NOT wipe the card. On continue we reopen to `working` and preserve the
- * accumulated `touchPoints`/`summary`/`graph`/`research`/`startedAt`, appending the new
+ * accumulated `touchPoints`/`summary`/`research`/`startedAt`, appending the new
  * prompt to the `prompts` arc (the goal stays at `prompts[0]`, the latest is `prompt`).
  *
  * Returns `continued: true` when an existing session was extended — the caller uses this
@@ -235,12 +257,14 @@ export function startSession(
       flushNow(sessionId); // lifecycle transition — persist immediately
     }
     markDirty(sessionId);
+    pruneLiveSessions();
     return { session: existing, continued: true };
   }
   const session = newSession(sessionId, prompt, Date.now());
   sessions.set(sessionId, session);
   activeSessionId = sessionId;
   markDirty(sessionId);
+  pruneLiveSessions();
   return { session, continued: false };
 }
 
@@ -253,7 +277,7 @@ export function addTouchPoint(sessionId: string, tp: TouchPoint): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Activity state — live summary + graph produced by summarizeActivity()
+// Activity state — live summary produced by summarizeActivity()
 // ---------------------------------------------------------------------------
 
 export function setActivityGenerating(sessionId: string): boolean {
@@ -266,7 +290,7 @@ export function setActivityGenerating(sessionId: string): boolean {
 /**
  * Records a fresh activity summary. Returns the FocusEntry it appended to `focusHistory`,
  * or `null` if nothing was appended (unknown session, or the summary was a non-meaningful
- * repeat). Either way the live `summary`/`graph`/`suggestedTopics` are refreshed.
+ * repeat). Either way the live `summary`/`suggestedTopics` are refreshed.
  *
  * Append gate (two layers, both must pass):
  *   1. `allowAppend` — the caller (activity.ts) only sets this when real progress happened
@@ -283,8 +307,6 @@ export function setActivity(
   sessionId: string,
   update: {
     summary: string;
-    /** null = the model judged this work doesn't warrant a workflow graph (trivial/single-step). */
-    graph: string | null;
     topics: SuggestedTopic[];
     turnSeq: number;
     turnPrompt: string;
@@ -313,18 +335,6 @@ export function setActivity(
   }
 
   s.summary = update.summary;
-
-  // --- Workflow visibility + content (folded into Current Focus) ---
-  // VISIBILITY (turn-scoped, sticky): show a workflow when the agent went through plan mode this
-  // turn OR the model judged the work multi-phase (non-null graph). Stamping workflowTurnSeq with
-  // THIS turn makes it sticky within the turn (a later trivial/null tick can't hide it) yet stale
-  // on the next prompt (turnSeq bumps), so visibility is re-decided fresh — see isWorkflowVisible.
-  const wantsWorkflow = isPlannedTurn(sessionId, update.turnSeq) || update.graph != null;
-  if (wantsWorkflow) s.workflowTurnSeq = update.turnSeq;
-  // CONTENT (session-spanning, monotonic): never overwrite a real storyline with null. A trivial
-  // tick after a rich one keeps the drawn graph; hiding is the visibility layer's job, not erasure.
-  if (update.graph != null) s.graph = update.graph;
-
   s.suggestedTopics = filterSuggestedTopics(s, update.topics);
   s.activityStatus = 'ready';
   s.activityError = null;
@@ -376,6 +386,25 @@ export function clearWaiting(sessionId: string): boolean {
   return true;
 }
 
+/**
+ * Marks a known session as actively working again without starting a new turn.
+ *
+ * This is used when lifecycle inference got ahead of the agent (for example a
+ * Stop/auto-close reached us before later tool hooks for the same live turn).
+ * Unlike startSession(), this preserves the existing prompt arc and focus state.
+ */
+export function markWorking(sessionId: string): boolean {
+  const s = sessions.get(sessionId);
+  if (!s) return false;
+  if (s.status !== 'working' || s.waitingReason !== null || s.finishedAt !== null) {
+    s.status = 'working';
+    s.waitingReason = null;
+    s.finishedAt = null;
+    markDirty(sessionId);
+  }
+  return true;
+}
+
 /** Invoked when a session reaches a terminal state (done), so server-only side caches —
  *  research prefetch today — can free per-session state. Injected at boot to keep state.ts
  *  dependency-free: the import direction stays one-way (prefetch → state, never the reverse),
@@ -385,18 +414,25 @@ export function setSessionEndListener(cb: ((sessionId: string) => void) | null):
   sessionEndListener = cb;
 }
 
+/** Invoked when a session is removed from the live in-memory window, so side modules with
+ * long-lived per-session metadata can forget it too. */
+let sessionDropListener: ((sessionId: string) => void) | null = null;
+export function setSessionDropListener(cb: ((sessionId: string) => void) | null): void {
+  sessionDropListener = cb;
+}
+
 export function finishSession(sessionId: string): boolean {
   const s = sessions.get(sessionId);
   if (!s) return false;
   s.status = 'done';
   s.waitingReason = null;
   s.finishedAt = Date.now();
-  plannedTurn.delete(sessionId); // ephemeral marker — drop on terminal transition
   flushNow(sessionId); // lifecycle transition — persist immediately
   // Free server-only side caches (prefetch). Without this the prefetch cache was freed only
   // on explicit /close, so done/stale/turn-end sessions leaked warmed entries for the life of
   // the daemon. A reopen (new prompt) re-warms via the /activity poll.
   sessionEndListener?.(sessionId);
+  pruneLiveSessions();
   return true;
 }
 
@@ -406,8 +442,43 @@ export function closeSession(sessionId: string): boolean {
   const s = sessions.get(sessionId);
   if (!s) return false;
   s.closed = true;
-  plannedTurn.delete(sessionId); // ephemeral marker — drop when the tab is dismissed
   flushNow(sessionId);
+  return true;
+}
+
+/** Pin a session to the top of the sidebar (stamps pinnedAt = now). Sort is most-recent-pin-first,
+ *  so re-pinning lifts a session above earlier pins. Lifecycle-ish state → flush immediately,
+ *  mirroring closeSession. Returns false for unknown ids (idempotent caller side). */
+export function pinSession(sessionId: string): boolean {
+  const s = sessions.get(sessionId);
+  if (!s) return false;
+  s.pinnedAt = Date.now();
+  flushNow(sessionId);
+  return true;
+}
+
+/** Unpin a session (clears pinnedAt → falls back to insertion order among unpinned). */
+export function unpinSession(sessionId: string): boolean {
+  const s = sessions.get(sessionId);
+  if (!s) return false;
+  s.pinnedAt = null;
+  flushNow(sessionId);
+  return true;
+}
+
+/** Mark a research briefing as read (stamps readAt = now, once). Called when the user opens a
+ *  briefing in the Research tab. User-intent state → flush immediately, matching pinSession so
+ *  "read" survives a hard crash and amber doesn't re-light on restart. Idempotent: a second open
+ *  leaves the original readAt untouched. Returns false for unknown session or ts. */
+export function markResearchRead(sessionId: string, ts: number): boolean {
+  const s = sessions.get(sessionId);
+  if (!s) return false;
+  const r = s.research.find((x) => x.ts === ts);
+  if (!r) return false;
+  if (r.readAt == null) {
+    r.readAt = Date.now();
+    flushNow(sessionId);
+  }
   return true;
 }
 

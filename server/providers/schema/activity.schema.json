@@ -6,10 +6,6 @@
       "type": "string",
       "description": "2-4 sentences of markdown describing what the agent is doing right now. Present tense, no preamble."
     },
-    "graph": {
-      "type": ["string", "null"],
-      "description": "EITHER null, OR a valid Mermaid `graph LR` milestone STORYLINE of the session. Return null when the work does NOT warrant a workflow graph — a single-step task, a quick question/answer, or trivial linear work with no real phases; the dashboard then shows no workflow. When the agent went through plan mode this turn, always return a graph (never null). When you DO draw one: first node is a rounded subject node naming the session goal in <=5 words tagged :::goal, e.g. G([\"Fix login bug\"]):::goal. Then 3-6 intent-named PHASE nodes (e.g. \"Diagnose token expiry\"), never raw tool calls. Mark the current phase :::active (when waiting, append a reason chip and mark THAT). Append-only: extend the previous storyline, do not redraw. Max 6 nodes after the goal node; labels double-quoted and <=5 words. End with: classDef goal fill:#161b22,stroke:#4493f8,color:#fff; and classDef active fill:#1f6feb,stroke:#4493f8,color:#fff;. NO markdown code fences."
-    },
     "topics": {
       "type": "array",
       "description": "3-6 research topics worth reading up on, derived from the agent's current work (libraries/APIs in play, concepts, error messages, unfamiliar terms). Extraction only — do NOT search the web. Skip the trivial/obvious. Keep stable vs the previous topics unless the focus has shifted. Empty array if nothing is worth suggesting.",
@@ -30,6 +26,6 @@
       }
     }
   },
-  "required": ["summary", "graph", "topics"],
+  "required": ["summary", "topics"],
   "additionalProperties": false
 }

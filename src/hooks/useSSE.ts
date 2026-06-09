@@ -53,6 +53,7 @@ export function useSSE(handlers: HandlerMap): ConnectionStatus {
       'waiting',
       'research_result',
       'research_primed',
+      'research_warming',
       'heartbeat',
     ];
 

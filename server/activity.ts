@@ -9,14 +9,18 @@
  *   - Rerun-on-growth: if transcript grew while a call was in-flight, one
  *     follow-up run fires immediately after the in-flight call resolves
  *
- * Triggered three ways:
+ * Triggered four ways:
  *   1. scheduleSummarize(sessionId)  — from PostToolUse (debounced, any session)
  *   2. summarizeNow(sessionId)       — from Stop and POST /activity (no debounce)
  *   3. POST /activity {sessionId}    — client poll for the viewed session (30s)
+ *   4. startLiveSummaryPoll()        — server-side 5s poll over ALL working sessions;
+ *      re-summarises on transcript growth. The primary path for assistant-text-only turns:
+ *      Claude Code fires no hook when the agent emits text without a tool call, so without
+ *      this the Current Focus panel freezes until the next tool hook or the viewed-tab poll.
  */
 import { watch } from 'fs';
 import type { FSWatcher } from 'fs';
-import { getSession, finishSession, isPlannedTurn } from './state.js';
+import { getSession, finishSession } from './state.js';
 import { setActivityGenerating, setActivity, setActivityError } from './state.js';
 import { broadcast } from './sse.js';
 import {
@@ -129,6 +133,15 @@ export function stopTranscriptWatcher(sessionId: string): void {
   m.transcriptWatcher = null;
 }
 
+/** Drop all scheduler/watch state for a session that left the live in-memory window. */
+export function forgetActivitySession(sessionId: string): void {
+  const m = meta.get(sessionId);
+  if (!m) return;
+  if (m.debounceTimer !== null) clearTimeout(m.debounceTimer);
+  if (m.transcriptWatcher !== null) m.transcriptWatcher.close();
+  meta.delete(sessionId);
+}
+
 /** Clear all per-session state (test teardown only). */
 export function _resetActivityForTest(): void {
   for (const m of meta.values()) {
@@ -136,6 +149,7 @@ export function _resetActivityForTest(): void {
     if (m.transcriptWatcher !== null) m.transcriptWatcher.close();
   }
   meta.clear();
+  livePollInFlight = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -243,17 +257,40 @@ async function handleTranscriptChange(
  */
 const STALE_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
 const STALE_CHECK_INTERVAL_MS = 30_000; // check every 30 s
+/** How often the live size-poll checks every working session for transcript growth. */
+const LIVE_POLL_MS = 5_000;
+/** Re-entrancy guard: skip a poll tick if the prior pass is still running (a slow `stat` must not
+ *  let passes pile up and fan out duplicate work). */
+let livePollInFlight = false;
+
+/** A working session that has a known transcript path — the unit both background loops act on. */
+type LiveSession = NonNullable<ReturnType<typeof getSession>>;
+interface LiveSessionEntry {
+  sessionId: string;
+  m: SessionMeta;
+  session: LiveSession;
+  transcriptPath: string;
+}
+
+/**
+ * Yield every working session that has a recorded transcript path. Shared by the stale-session
+ * watcher and the live size-poll so the "is this session live and watchable?" guard lives once.
+ */
+function* eachWorkingSessionWithTranscript(): Generator<LiveSessionEntry> {
+  for (const [sessionId, m] of meta.entries()) {
+    const session = getSession(sessionId);
+    if (!session || session.status !== 'working' || !m.transcriptPath) continue;
+    yield { sessionId, m, session, transcriptPath: m.transcriptPath };
+  }
+}
 
 export function startStaleSessionWatcher(): void {
   setInterval(async () => {
-    for (const [sessionId, m] of meta.entries()) {
-      const session = getSession(sessionId);
-      // Only working sessions with a known transcript path
-      if (!session || session.status !== 'working' || !m.transcriptPath) continue;
+    for (const { sessionId, m, session, transcriptPath } of eachWorkingSessionWithTranscript()) {
       // Grace period: don't fire on sessions younger than the threshold
       if (Date.now() - session.startedAt < STALE_THRESHOLD_MS) continue;
 
-      const mtime = await getTranscriptMtime(m.transcriptPath);
+      const mtime = await getTranscriptMtime(transcriptPath);
       if (mtime === null) continue;
 
       if (Date.now() - mtime > STALE_THRESHOLD_MS) {
@@ -270,6 +307,42 @@ export function startStaleSessionWatcher(): void {
       }
     }
   }, STALE_CHECK_INTERVAL_MS);
+}
+
+/**
+ * One pass of the live size-poll: for every working session, re-summarise if its transcript grew
+ * since the last summary. This is the primary trigger for assistant-text-only turns — Claude Code
+ * fires no hook when the agent emits text without a tool call, so without this the Current Focus
+ * panel would freeze until the next tool hook or the viewed-tab 30s poll.
+ *
+ * The byte-size growth pre-check is deliberate: run() does NOT skip when the transcript is absent
+ * (no-transcript sessions summarise by design — see index.ts), so calling it unconditionally on a
+ * session whose file briefly doesn't exist would fire empty-context LLM calls every tick. run()'s
+ * own skip-if-unchanged + single-flight remain the authoritative cost guards once we do call it.
+ *
+ * Exported for unit tests.
+ */
+export async function runLiveSummaryPass(): Promise<void> {
+  if (livePollInFlight) return; // a prior pass is still running — don't overlap/pile up
+  livePollInFlight = true;
+  try {
+    for (const { sessionId, m, transcriptPath } of eachWorkingSessionWithTranscript()) {
+      const size = await getTranscriptSize(transcriptPath);
+      if (size === null) continue; // file not present yet — nothing to summarise
+      // Exact-equality skip (matches run()'s own guard). Using `<=` would permanently stall the poll
+      // for a session whose transcript ever shrank (rotation/truncation); `===` re-summarises on any change.
+      if (m.lastSummarizedSize !== null && size === m.lastSummarizedSize) continue; // unchanged
+      void run(sessionId);
+    }
+  } finally {
+    livePollInFlight = false;
+  }
+}
+
+/** Start the live size-poll (every LIVE_POLL_MS). Call once at server startup. */
+export function startLiveSummaryPoll(): void {
+  // unref so the poll interval never keeps the process alive on its own (the HTTP server does).
+  setInterval(() => void runLiveSummaryPass(), LIVE_POLL_MS).unref?.();
 }
 
 // ---------------------------------------------------------------------------
@@ -336,20 +409,14 @@ async function run(sessionId: string): Promise<void> {
       prompts: session.prompts,
       recentTouchPoints: session.touchPoints.slice(0, 10),
       transcriptTail,
-      // Feed the prior storyline back so the model extends it append-only,
-      // keeping the session's silhouette stable across ticks.
-      previousGraph: session.graph,
-      // Feed prior topics back for the same anti-churn reason — stable chips.
+      // Feed prior topics back for anti-churn — stable chips.
       previousTopics: session.suggestedTopics,
       status: session.status,
       waitingReason: session.waitingReason,
-      // Hybrid workflow-visibility floor: if the agent exited plan mode on THIS turn, the
-      // prompt is told to always draw a graph (a planned task is inherently multi-phase).
-      planned: isPlannedTurn(sessionId, turnSeq),
     };
 
     // `topics` defaults to [] defensively — a provider that returns nothing must not crash.
-    const { summary, graph, topics = [] } = await provider.summarizeActivity(ctx);
+    const { summary, topics = [] } = await provider.summarizeActivity(ctx);
 
     // setActivity filters topics against already-researched + in-flight before storing,
     // so broadcast the stored (filtered) list, not the raw model output. It also returns
@@ -357,7 +424,6 @@ async function run(sessionId: string): Promise<void> {
     // the same entry the server stored (de-dup logic lives ONLY on the server).
     const entry = setActivity(sessionId, {
       summary,
-      graph,
       topics,
       turnSeq,
       turnPrompt,
@@ -365,15 +431,9 @@ async function run(sessionId: string): Promise<void> {
     });
     const stored = getSession(sessionId);
     const suggestedTopics = stored?.suggestedTopics ?? [];
-    // Broadcast the STORED graph + visibility marker, not the raw model output: setActivity
-    // may keep the previous storyline when the model returned null (content is monotonic), and
-    // workflowTurnSeq drives whether the client folds the graph into Current Focus.
-    const storedGraph = stored?.graph ?? null;
     broadcast('activity', {
       sessionId,
       summary,
-      graph: storedGraph,
-      workflowTurnSeq: stored?.workflowTurnSeq ?? null,
       topics: suggestedTopics,
       entry,
     });
@@ -381,7 +441,7 @@ async function run(sessionId: string): Promise<void> {
       m.lastSummarizedSize = currentSize;
     }
     console.log(
-      `[activity] Summarised ${sessionId} (${summary.length} chars, ${storedGraph?.length ?? 0} chars graph, ${suggestedTopics.length} topics)`,
+      `[activity] Summarised ${sessionId} (${summary.length} chars, ${suggestedTopics.length} topics)`,
     );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

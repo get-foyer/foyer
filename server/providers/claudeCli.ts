@@ -21,13 +21,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdtemp, rm } from 'fs/promises';
 import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
-import { stripFences, normalizeTopics, normalizeGraph } from './text.js';
+import { normalizeTopics, RESEARCH_PROMPT, parseResearchSections } from './text.js';
 import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './internal.js';
 
 const execFile = promisify(_execFile);
 
 /**
- * Fast, cheap model for activity summarisation + graph generation.
+ * Fast, cheap model for activity summarisation.
  *
  * The summariser runs frequently (debounced, plus periodic polls), so it is
  * pinned to Haiku to keep cost low — matching the deliberate fast-model choice
@@ -36,19 +36,26 @@ const execFile = promisify(_execFile);
  */
 const SUMMARY_MODEL = process.env.FOYER_CLAUDE_CLI_SUMMARY_MODEL ?? 'claude-haiku-4-5';
 
-const GRAPH_PROMPT = (plan: string) =>
-  `Convert the following task plan into a concise Mermaid flowchart.
-Use "graph TD" (top-down) syntax. Output ONLY the mermaid diagram code — no explanation, no markdown fences.
-Wrap every node label in double quotes so that spaces and special characters are handled correctly — for example A["Read file.ts"] instead of A[Read file.ts].
-Keep each node label short (≤ 5 words) so nodes stay compact and readable.
+/**
+ * Model for the research briefing.
+ *
+ * Unlike the summariser (high-frequency, trivial → Haiku), research runs only on an explicit tap /
+ * prefetch and its briefing is the thing the user actually reads — synthesis quality matters. Pin
+ * Sonnet: fast enough to finish well inside the timeout while keeping briefings useful. The prior
+ * default was the user's *unpinned* CLI model (often Opus), whose slow WebSearch+WebFetch calls
+ * blew the 90s timeout and surfaced as "claude -p failed". Overridable via
+ * FOYER_CLAUDE_CLI_RESEARCH_MODEL.
+ *
+ * Cross-provider note: codex's analogous lever is model_reasoning_effort, not a model name — see the
+ * deferred "codex research-tier" item in TODOS.md.
+ */
+const RESEARCH_MODEL = process.env.FOYER_CLAUDE_CLI_RESEARCH_MODEL ?? 'claude-sonnet-4-6';
 
-Plan:
-${plan.slice(0, 4000)}`;
-
-const RESEARCH_PROMPT = (topic: string) =>
-  `Produce a concise research briefing on: "${topic}"
-Include: a 2-3 paragraph summary, key insights, and cite 5 relevant sources (title + URL).
-Format sources as a numbered list at the end.`;
+// Matches ANSI SGR colour sequences (e.g. ESC[33m) so we can strip them from CLI stderr before
+// surfacing a failure reason. The literal ESC (\x1b) is the canonical legitimate use of a
+// control-char regex; no-control-regex would otherwise flag it.
+// eslint-disable-next-line no-control-regex
+const ANSI_SGR = /\x1b\[[0-9;]*m/g;
 
 export class ClaudeCliProvider implements LlmProvider {
   readonly id = 'claude-cli' as const;
@@ -62,19 +69,14 @@ export class ClaudeCliProvider implements LlmProvider {
     }
   }
 
-  async generateGraph(planText: string): Promise<string> {
-    const result = await this.run(GRAPH_PROMPT(planText), []);
-    return stripFences(result);
-  }
-
   async summarizeActivity(
     ctx: ActivityContext,
-  ): Promise<{ summary: string; graph: string | null; topics: SuggestedTopic[] }> {
+  ): Promise<{ summary: string; topics: SuggestedTopic[] }> {
     const { buildActivityPrompt } = await import('./codex.js');
     const prompt = buildActivityPrompt(ctx);
     // Pin to a fast/cheap model — summarisation runs often and doesn't need the
     // user's (potentially Opus-tier) default CLI model. Request JSON output so
-    // we can parse summary + graph reliably.
+    // we can parse summary + topics reliably.
     const raw = await this.run(prompt, ['--model', SUMMARY_MODEL]);
     return parseActivityJson(raw);
   }
@@ -84,8 +86,18 @@ export class ClaudeCliProvider implements LlmProvider {
     // '--output-format json' and run() parses the JSON envelope ({ result }).
     // A second '--output-format' (text) would override it, the CLI would emit
     // plain text, JSON.parse(stdout) would throw, and /research would 500.
-    const result = await this.run(RESEARCH_PROMPT(topic), ['--allowedTools', 'WebSearch,WebFetch']);
-    return parseResearchText(result);
+    // Pin research to RESEARCH_MODEL (Sonnet): the prior unpinned default (often Opus) blew the
+    // timeout on slow WebSearch/WebFetch calls. The model's `result` is our structured-briefing
+    // JSON; parseResearchSections parses it (with a single-section fallback) and yields the source
+    // links too — replacing the old text-regex link scraping entirely.
+    const result = await this.run(RESEARCH_PROMPT(topic), [
+      '--model',
+      RESEARCH_MODEL,
+      '--allowedTools',
+      'WebSearch,WebFetch',
+    ]);
+    const { lede, sections, sources } = parseResearchSections(result, topic);
+    return { lede, sections, links: sources };
   }
 
   private async run(prompt: string, extraArgs: string[]): Promise<string> {
@@ -99,8 +111,12 @@ export class ClaudeCliProvider implements LlmProvider {
     // guard in hooks.ts can drop any event that reaches /hook despite layers 1+2.
     const sentinelPrompt = `${FOYER_INTERNAL_SENTINEL}\n${prompt}`;
     try {
-      const { stdout } = await execFile('claude', buildClaudeArgs(sentinelPrompt, extraArgs), {
-        timeout: 90_000,
+      // execFile leaves the child's stdin as an open pipe; claude (v2.1.168+) then waits ~3s for
+      // possible stdin input before proceeding ("no stdin data received in 3s"). We pass the prompt
+      // via -p, never stdin, so close it: the promisified execFile exposes the ChildProcess as
+      // `.child` (documented). EOF → claude skips the wait, no warning, full timeout budget.
+      const p = execFile('claude', buildClaudeArgs(sentinelPrompt, extraArgs), {
+        timeout: 120_000,
         cwd: isolatedDir,
         env: {
           ...process.env,
@@ -112,10 +128,18 @@ export class ClaudeCliProvider implements LlmProvider {
           ANTHROPIC_API_KEY: undefined,
         },
       });
+      p.child?.stdin?.end();
+      const { stdout } = await p;
       const parsed = JSON.parse(stdout) as { result?: string };
       return parsed.result ?? stdout;
     } catch (err) {
-      const e = err as { stdout?: string; stderr?: string; message?: string };
+      const e = err as {
+        stdout?: string;
+        stderr?: string;
+        message?: string;
+        killed?: boolean;
+        signal?: string;
+      };
       // Try to extract result from partial stdout
       if (e.stdout) {
         try {
@@ -125,7 +149,15 @@ export class ClaudeCliProvider implements LlmProvider {
           /* ignore */
         }
       }
-      throw new Error(`claude -p failed: ${e.message ?? String(err)}`);
+      // Surface the real failure reason instead of the raw (ANSI-coloured) stdin warning the old
+      // message used to show. A timeout kills the child with SIGTERM (killed=true); a maxBuffer
+      // overflow also sets killed/SIGTERM, so guard against mislabeling it as a timeout.
+      const ansi = (s?: string) => (s ?? '').replace(ANSI_SGR, '').trim();
+      if (e.killed && e.signal === 'SIGTERM' && !e.message?.includes('maxBuffer')) {
+        // Generic wording: run() is shared by summarizeActivity / research.
+        throw new Error('claude -p timed out after 120s');
+      }
+      throw new Error(`claude -p failed: ${ansi(e.stderr) || ansi(e.message) || String(err)}`);
     } finally {
       await rm(isolatedDir, { recursive: true, force: true });
     }
@@ -160,13 +192,12 @@ export function buildClaudeArgs(sentinelPrompt: string, extraArgs: string[]): st
 }
 
 /**
- * Parse { summary, graph, topics } from the LLM's JSON output.
+ * Parse { summary, topics } from the LLM's JSON output.
  * Falls back gracefully if JSON is malformed or fields are missing.
  * Shared by ClaudeCliProvider and AnthropicApiProvider.
  */
 export function parseActivityJson(raw: string): {
   summary: string;
-  graph: string | null;
   topics: SuggestedTopic[];
 } {
   // Strip any accidental markdown fences around the JSON
@@ -178,47 +209,13 @@ export function parseActivityJson(raw: string): {
     const parsed = JSON.parse(cleaned) as Record<string, unknown>;
     return {
       summary: typeof parsed.summary === 'string' ? parsed.summary : 'Agent is working…',
-      // null = no workflow warranted this session (trivial work) → dashboard shows no graph region.
-      graph: normalizeGraph(parsed.graph),
       topics: normalizeTopics(parsed.topics),
     };
   } catch {
-    // Unparseable JSON: no structured graph to show → null (no workflow); keep the text as summary.
+    // Unparseable JSON: keep the text as summary, no topics.
     return {
       summary: raw.slice(0, 800) || 'Agent is working…',
-      graph: null,
       topics: [],
     };
   }
-}
-
-export function parseResearchText(text: string): ResearchResult {
-  // Extract URLs from the text — the model formats them as a numbered list
-  const urlPattern = /(?:https?:\/\/[^\s)>\]]+)/g;
-  const urlMatches = text.match(urlPattern) ?? [];
-
-  // Try to extract title-URL pairs from "1. Title — URL" or "1. [Title](URL)" patterns
-  const links: { title: string; url: string }[] = [];
-  const numberedPattern = /\d+\.\s+([^\n]+?)\s*—\s*(https?:\/\/\S+)/g;
-  const mdLinkPattern = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
-
-  let match;
-  while ((match = numberedPattern.exec(text)) !== null) {
-    links.push({ title: match[1].trim(), url: match[2].trim() });
-  }
-  while ((match = mdLinkPattern.exec(text)) !== null) {
-    links.push({ title: match[1].trim(), url: match[2].trim() });
-  }
-
-  // Deduplicate by URL
-  const seen = new Set<string>();
-  const dedupedLinks = [...links, ...urlMatches.map((u) => ({ title: u, url: u }))]
-    .filter(({ url }) => {
-      if (seen.has(url)) return false;
-      seen.add(url);
-      return true;
-    })
-    .slice(0, 8);
-
-  return { summary: text, links: dedupedLinks };
 }

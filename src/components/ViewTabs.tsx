@@ -16,9 +16,8 @@ interface Props {
  * from the left sidebar, which picks WHICH session.
  *
  * No module-index numbers here: these are views, not modules (FOCUS bundles modules
- * 01·Current Focus — with the workflow graph folded in (ADR 0004) — and 02·Touch Points;
- * RESEARCH is 03). DESIGN.md's channel-strip indices belong on the panel headers inside each
- * view, not on the view tabs.
+ * 01·Current Focus and 02·Touch Points; RESEARCH is 03). DESIGN.md's channel-strip indices
+ * belong on the panel headers inside each view, not on the view tabs.
  *
  * Amber uses the shipped `--working` token, which forward-maps to the Instrument `--signal`
  * accent when that palette swap lands (see DESIGN.md) — same precedent as FollowControl.

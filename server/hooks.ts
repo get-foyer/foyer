@@ -13,7 +13,7 @@ import {
   clearWaiting,
   finishSession,
   getSession,
-  markPlanned,
+  markWorking,
 } from './state.js';
 import { broadcast } from './sse.js';
 import {
@@ -44,7 +44,7 @@ interface HookPayload {
 }
 
 // ---------------------------------------------------------------------------
-// Codex command-hook envelope — the `foyer hook codex` wraps Codex payloads
+// Codex command-hook envelope — `foyer hook codex` wraps Codex payloads
 // as { source:'codex', event:<CodexEvent>, payload:<raw> }.
 // ---------------------------------------------------------------------------
 
@@ -148,10 +148,9 @@ export async function handleHook(req: Request, res: Response): Promise<void> {
         break;
       case 'PreToolUse':
         if (payload.tool_name === 'ExitPlanMode') {
-          // Agent approved the plan — a planned task is inherently multi-phase, so flag this
-          // turn (hybrid workflow floor) before the immediate summarisation reads it.
+          // Plan presented/approved — clear the plan-approval wait and refresh the focus now
+          // that the agent is about to resume real work.
           clearWaiting(sessionId);
-          markPlanned(sessionId);
           summarizeNow(sessionId);
         } else if (payload.tool_name === 'AskUserQuestion') {
           // Extract the first question text from the `questions` array
@@ -228,11 +227,21 @@ async function onUserPrompt(sessionId: string, p: HookPayload): Promise<void> {
 }
 
 async function onPostToolUse(sessionId: string, p: HookPayload): Promise<void> {
-  // Any tool completion clears the waiting state (agent is active again)
+  // Any tool completion proves the agent is active again. This also repairs a stale
+  // terminal state if Stop / transcript auto-close reached us before later hook traffic.
+  // Only revive sessions that are merely waiting or prematurely done — never a tab the
+  // user dismissed (closed) nor a terminal `interrupted` session (crash-recovery, ADR
+  // 0002); a still-running agent's late hooks must not resurrect either of those.
   const s = getSession(sessionId);
-  if (s?.status === 'waiting') {
-    clearWaiting(sessionId);
-    broadcast('task', { sessionId, prompt: s.prompt, prompts: s.prompts, startedAt: s.startedAt });
+  if (s && !s.closed && (s.status === 'waiting' || s.status === 'done')) {
+    markWorking(sessionId);
+    const live = getSession(sessionId) ?? s;
+    broadcast('task', {
+      sessionId,
+      prompt: live.prompt,
+      prompts: live.prompts,
+      startedAt: live.startedAt,
+    });
   }
 
   const toolName = p.tool_name ?? 'unknown';

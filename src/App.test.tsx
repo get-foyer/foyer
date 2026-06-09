@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { Session, FocusEntry } from './types';
 import { MAX_FOCUS } from './types';
-import { reducer, initialState, isActiveSession } from './App';
+import { reducer, initialState, isActiveSession, persistClosedSession } from './App';
 
 /** Build a FocusEntry for reducer tests. */
 function makeEntry(over: Partial<FocusEntry> = {}): FocusEntry {
@@ -21,8 +21,6 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     turnSeq: 1,
     summary: null,
     focusHistory: [],
-    graph: null,
-    workflowTurnSeq: null,
     activityStatus: 'idle',
     activityError: null,
     waitingReason: null,
@@ -178,7 +176,6 @@ describe('reducer — task', () => {
       prompt: 'do something',
       startedAt: 9999,
       summary: null,
-      graph: null,
       touchPoints: [],
       research: [],
     });
@@ -228,7 +225,7 @@ describe('reducer — task', () => {
 // ---------------------------------------------------------------------------
 
 describe('reducer — task continuation', () => {
-  it('reopens a done session in place: adopts server prompts, working, finishedAt cleared, PRESERVES summary/graph/touchPoints', () => {
+  it('reopens a done session in place: adopts server prompts, working, finishedAt cleared, PRESERVES summary/touchPoints', () => {
     const a = makeSession({
       sessionId: 'a',
       status: 'done',
@@ -236,7 +233,6 @@ describe('reducer — task continuation', () => {
       prompt: 'build login',
       prompts: ['build login'],
       summary: 'Built the login form',
-      graph: 'graph LR\n  G(["Build login"]):::goal',
       touchPoints: [{ path: '/src/login.ts', tool: 'Write', ts: 1 }],
     });
     const state = { ...initialState, sessions: [a], activeSessionId: 'a' };
@@ -256,7 +252,6 @@ describe('reducer — task continuation', () => {
     expect(s.prompts).toEqual(['build login', 'now add tests']);
     // Accumulated state preserved across the turn
     expect(s.summary).toBe('Built the login form');
-    expect(s.graph).toBe('graph LR\n  G(["Build login"]):::goal');
     expect(s.touchPoints).toHaveLength(1);
   });
 
@@ -340,15 +335,11 @@ describe('reducer — background session updates', () => {
       payload: {
         sessionId: 'b',
         summary: '# Plan B',
-        graph: 'graph TD\n  A-->B',
-        workflowTurnSeq: 1,
         topics: [],
       },
     });
     const bNext = next.sessions.find((s) => s.sessionId === 'b')!;
     expect(bNext.summary).toBe('# Plan B');
-    expect(bNext.graph).toBe('graph TD\n  A-->B');
-    expect(bNext.workflowTurnSeq).toBe(1);
     expect(bNext.activityStatus).toBe('ready');
     expect(next.sessions.find((s) => s.sessionId === 'a')!.summary).toBeNull();
   });
@@ -360,7 +351,7 @@ describe('reducer — background session updates', () => {
       { type: 'touch' as const, payload: { sessionId: 'x', path: '/x', tool: 'Write', ts: 0 } },
       {
         type: 'activity' as const,
-        payload: { sessionId: 'x', summary: 'S', graph: 'G', workflowTurnSeq: 1, topics: [] },
+        payload: { sessionId: 'x', summary: 'S', topics: [] },
       },
       { type: 'activity_error' as const, payload: { sessionId: 'x', error: 'X' } },
       { type: 'activity_generating' as const, payload: { sessionId: 'x' } },
@@ -368,7 +359,14 @@ describe('reducer — background session updates', () => {
       { type: 'waiting' as const, payload: { sessionId: 'x', reason: 'X' } },
       {
         type: 'research_result' as const,
-        payload: { sessionId: 'x', topic: 'T', summary: 'S', links: [], ts: 0 },
+        payload: {
+          sessionId: 'x',
+          topic: 'T',
+          lede: '',
+          sections: [{ heading: '', body: 'S' }],
+          links: [],
+          ts: 0,
+        },
       },
     ];
     for (const action of actions) {
@@ -389,11 +387,10 @@ describe('reducer — activity lifecycle', () => {
     const generating = reducer(state, { type: 'activity_generating', payload: { sessionId: 'a' } });
     expect(generating.sessions[0].activityStatus).toBe('generating');
 
-    // Anti-flicker: existing summary/graph preserved during regenerate
+    // Anti-flicker: existing summary preserved during regenerate
     const withSummary = makeSession({
       sessionId: 'a',
       summary: 'previous summary',
-      graph: 'graph TD\n  A-->B',
       activityStatus: 'ready',
     });
     const stateWithSummary = { ...initialState, sessions: [withSummary], activeSessionId: 'a' };
@@ -404,22 +401,17 @@ describe('reducer — activity lifecycle', () => {
     expect(regenerating.sessions[0].activityStatus).toBe('generating');
     // Old content preserved
     expect(regenerating.sessions[0].summary).toBe('previous summary');
-    expect(regenerating.sessions[0].graph).toBe('graph TD\n  A-->B');
 
     const ready = reducer(generating, {
       type: 'activity',
       payload: {
         sessionId: 'a',
         summary: 'Agent refactoring',
-        graph: 'graph TD; A-->B',
-        workflowTurnSeq: 1,
         topics: [{ topic: 'React useTransition', reason: 'in App.tsx' }],
       },
     });
     expect(ready.sessions[0].activityStatus).toBe('ready');
     expect(ready.sessions[0].summary).toBe('Agent refactoring');
-    expect(ready.sessions[0].graph).toBe('graph TD; A-->B');
-    expect(ready.sessions[0].workflowTurnSeq).toBe(1);
     expect(ready.sessions[0].activityError).toBeNull();
     // activity carries the server-filtered suggested topics
     expect(ready.sessions[0].suggestedTopics.map((t) => t.topic)).toEqual(['React useTransition']);
@@ -430,30 +422,6 @@ describe('reducer — activity lifecycle', () => {
     });
     expect(errored.sessions[0].activityStatus).toBe('error');
     expect(errored.sessions[0].activityError).toBe('LLM timeout');
-  });
-
-  it('sets workflowTurnSeq and keeps the prior graph when the server reports a null graph (monotonic)', () => {
-    const a = makeSession({
-      sessionId: 'a',
-      turnSeq: 1,
-      graph: 'graph LR\n  A:::goal',
-      workflowTurnSeq: 1,
-    });
-    const state = { ...initialState, sessions: [a], activeSessionId: 'a' };
-    // A quieter tick reports graph: null, but the server keeps the storyline (monotonic) and
-    // workflowTurnSeq stays === turnSeq, so the fold-in remains visible with the prior graph.
-    const next = reducer(state, {
-      type: 'activity',
-      payload: {
-        sessionId: 'a',
-        summary: 'still going',
-        graph: null,
-        workflowTurnSeq: 1,
-        topics: [],
-      },
-    });
-    expect(next.sessions[0].graph).toBe('graph LR\n  A:::goal'); // prior graph preserved
-    expect(next.sessions[0].workflowTurnSeq).toBe(1);
   });
 });
 
@@ -473,8 +441,6 @@ describe('reducer — activity focus history', () => {
       payload: {
         sessionId: 'a',
         summary: 'new',
-        graph: 'g',
-        workflowTurnSeq: null,
         topics: [],
         entry: makeEntry({ id: 'a-2', summary: 'new' }),
       },
@@ -490,8 +456,6 @@ describe('reducer — activity focus history', () => {
       payload: {
         sessionId: 'a',
         summary: 's',
-        graph: 'g',
-        workflowTurnSeq: null,
         topics: [],
         entry: makeEntry({ id: 'a-1' }),
       },
@@ -504,7 +468,7 @@ describe('reducer — activity focus history', () => {
     const state = { ...initialState, sessions: [a], activeSessionId: 'a' };
     const next = reducer(state, {
       type: 'activity',
-      payload: { sessionId: 'a', summary: 'fresh', graph: 'g', workflowTurnSeq: null, topics: [] },
+      payload: { sessionId: 'a', summary: 'fresh', topics: [] },
     });
     expect(next.sessions[0].focusHistory).toHaveLength(1);
     expect(next.sessions[0].summary).toBe('fresh'); // live summary still updates
@@ -519,8 +483,6 @@ describe('reducer — activity focus history', () => {
       payload: {
         sessionId: 'a',
         summary: 's',
-        graph: 'g',
-        workflowTurnSeq: null,
         topics: [],
         entry: makeEntry({ id: 'a-new' }),
       },
@@ -620,7 +582,14 @@ describe('reducer — research_result', () => {
     const state = { ...initialState, sessions: [a], activeSessionId: 'a' };
     const next = reducer(state, {
       type: 'research_result',
-      payload: { sessionId: 'a', topic: 'React hooks', summary: 'Summary.', links: [], ts: 3000 },
+      payload: {
+        sessionId: 'a',
+        topic: 'React hooks',
+        lede: '',
+        sections: [{ heading: '', body: 'Summary.' }],
+        links: [],
+        ts: 3000,
+      },
     });
     expect(next.sessions[0].research).toHaveLength(1);
     expect(next.sessions[0].research[0].topic).toBe('React hooks');
@@ -631,15 +600,22 @@ describe('reducer — research_result', () => {
       sessionId: 'a',
       suggestedTopics: [
         { topic: 'React hooks', reason: 'x' },
-        { topic: 'Mermaid graph LR', reason: 'y' },
+        { topic: 'Zod schemas', reason: 'y' },
       ],
     });
     const state = { ...initialState, sessions: [a], activeSessionId: 'a' };
     const next = reducer(state, {
       type: 'research_result',
-      payload: { sessionId: 'a', topic: 'react HOOKS', summary: 'S', links: [], ts: 3000 },
+      payload: {
+        sessionId: 'a',
+        topic: 'react HOOKS',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
     });
-    expect(next.sessions[0].suggestedTopics.map((t) => t.topic)).toEqual(['Mermaid graph LR']);
+    expect(next.sessions[0].suggestedTopics.map((t) => t.topic)).toEqual(['Zod schemas']);
   });
 
   it('badges the Research tab unseen when you are NOT viewing it', () => {
@@ -647,7 +623,14 @@ describe('reducer — research_result', () => {
     const state = { ...initialState, sessions: [a], activeSessionId: 'a' }; // view defaults to focus
     const next = reducer(state, {
       type: 'research_result',
-      payload: { sessionId: 'a', topic: 'T', summary: 'S', links: [], ts: 3000 },
+      payload: {
+        sessionId: 'a',
+        topic: 'T',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
     });
     expect(next.researchUnseen).toContain('a');
   });
@@ -662,7 +645,14 @@ describe('reducer — research_result', () => {
     };
     const next = reducer(state, {
       type: 'research_result',
-      payload: { sessionId: 'a', topic: 'T', summary: 'S', links: [], ts: 3000 },
+      payload: {
+        sessionId: 'a',
+        topic: 'T',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
     });
     expect(next.researchUnseen).not.toContain('a');
   });
@@ -673,9 +663,92 @@ describe('reducer — research_result', () => {
     const state = { ...initialState, sessions: [a, b], activeSessionId: 'a' };
     const next = reducer(state, {
       type: 'research_result',
-      payload: { sessionId: 'b', topic: 'T', summary: 'S', links: [], ts: 3000 },
+      payload: {
+        sessionId: 'b',
+        topic: 'T',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
     });
     expect(next.researchUnseen).toContain('b');
+  });
+
+  // A WARMED tap (amber dot) returns instantly, so it auto-opens the Research tab on that
+  // briefing instead of merely badging it. Cold/warming taps keep the badge-only behavior above.
+  it('a WARMED (primed) tap on the active session auto-opens its Research tab on the briefing', () => {
+    const a = makeSession({ sessionId: 'a' });
+    const state = {
+      ...initialState,
+      sessions: [a],
+      activeSessionId: 'a', // view defaults to focus
+      primedTopics: { a: ['t'] }, // topicKey('T') === 't'
+    };
+    const next = reducer(state, {
+      type: 'research_result',
+      payload: {
+        sessionId: 'a',
+        topic: 'T',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
+    });
+    expect(next.viewBySession.a).toBe('research');
+    expect(next.selectedResearchBySession.a).toBe(3000);
+    expect(next.sessions[0].research[0].ts).toBe(3000);
+    expect(next.researchUnseen).not.toContain('a'); // opened, so not left unseen
+    expect(next.primedTopics.a).toEqual([]); // dot cleared
+  });
+
+  it('a WARMED tap for a NON-active session does NOT switch the view — it badges (guard)', () => {
+    const a = makeSession({ sessionId: 'a' });
+    const b = makeSession({ sessionId: 'b' });
+    const state = {
+      ...initialState,
+      sessions: [a, b],
+      activeSessionId: 'b', // user has moved on to b
+      primedTopics: { a: ['t'] },
+    };
+    const next = reducer(state, {
+      type: 'research_result',
+      payload: {
+        sessionId: 'a',
+        topic: 'T',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
+    });
+    expect(next.viewBySession.a).not.toBe('research'); // don't yank a view you left
+    expect(next.selectedResearchBySession.a).toBeUndefined();
+    expect(next.researchUnseen).toContain('a'); // badge only
+  });
+
+  it('a WARMED tap selects the NEW briefing even when an older one was open (no stale shadow)', () => {
+    const a = makeSession({ sessionId: 'a' });
+    const state = {
+      ...initialState,
+      sessions: [a],
+      activeSessionId: 'a',
+      primedTopics: { a: ['t'] },
+      selectedResearchBySession: { a: 1 }, // an older briefing was previously open
+    };
+    const next = reducer(state, {
+      type: 'research_result',
+      payload: {
+        sessionId: 'a',
+        topic: 'T',
+        lede: '',
+        sections: [{ heading: '', body: 'S' }],
+        links: [],
+        ts: 3000,
+      },
+    });
+    expect(next.selectedResearchBySession.a).toBe(3000); // new ts wins, not the stale 1
   });
 });
 
@@ -816,6 +889,23 @@ describe('reducer — close', () => {
       payload: { sessions: [a, b], activeSessionId: 'a' },
     });
     expect(afterSnapshot.sessions.map((s) => s.sessionId)).not.toContain('b');
+  });
+});
+
+describe('persistClosedSession', () => {
+  it('uses a keepalive request so close survives an immediate refresh', () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    persistClosedSession('s1');
+
+    expect(fetchMock).toHaveBeenCalledWith('/close', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 's1' }),
+      keepalive: true,
+    });
+    vi.unstubAllGlobals();
   });
 });
 
@@ -1054,7 +1144,14 @@ describe('reducer — primedTopics (prefetch dots)', () => {
     const state = { ...initialState, sessions: [a], primedTopics: { a: ['rsc'] } };
     const next = reducer(state, {
       type: 'research_result',
-      payload: { sessionId: 'a', topic: 'RSC', summary: 's', links: [], ts: 1 },
+      payload: {
+        sessionId: 'a',
+        topic: 'RSC',
+        lede: '',
+        sections: [{ heading: '', body: 's' }],
+        links: [],
+        ts: 1,
+      },
     });
     expect(next.primedTopics.a).toEqual([]);
   });
@@ -1067,8 +1164,6 @@ describe('reducer — primedTopics (prefetch dots)', () => {
       payload: {
         sessionId: 'a',
         summary: 's',
-        graph: 'g',
-        workflowTurnSeq: null,
         topics: [{ topic: 'Keep', reason: 'r' }],
         entry: null,
       },

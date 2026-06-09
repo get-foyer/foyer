@@ -1,13 +1,48 @@
 /**
  * Shared text-processing helpers for LLM provider output.
  */
-import type { SuggestedTopic } from '../../src/types.js';
+import type { SuggestedTopic, ResearchSection, ResearchLink } from '../../src/types.js';
 
 /** Caps for a single suggested topic — protects the UI and the downstream research prompt. */
 const TOPIC_MAX = 120;
 const REASON_MAX = 160;
 /** Hard cap on how many topics we surface as chips. */
 const MAX_TOPICS = 6;
+
+/** Caps for a parsed research briefing (defensive — the shape comes straight from an LLM). */
+const LEDE_MAX = 400;
+const HEADING_MAX = 120;
+const MAX_SECTIONS = 12;
+/** Mermaid source cap — a parse-time DoS guard before the renderer ever sees it. */
+const DIAGRAM_MAX = 4000;
+const MAX_SOURCES = 8;
+
+/**
+ * The shared research prompt. Asks every backend for the SAME structured documentation JSON so
+ * briefing shape doesn't drift by provider. Providers that search via the model (Anthropic)
+ * prepend their own "search the web" line; CLI providers get search through flags.
+ *
+ * The adaptive rule is load-bearing: a trivial topic must come back as ONE section with no
+ * diagram. Manufactured structure is the empty-chrome failure mode.
+ */
+export function RESEARCH_PROMPT(topic: string): string {
+  return `Produce a research briefing on: "${topic}"
+
+Return ONLY a JSON object — no markdown code fences, no prose before or after it — with exactly this shape:
+{
+  "lede": "1-2 sentence plain-language summary of the whole topic",
+  "sections": [
+    { "heading": "Short section title", "body": "GitHub-flavored markdown", "diagram": "optional raw mermaid source" }
+  ],
+  "sources": [ { "title": "Source title", "url": "https://..." } ]
+}
+
+Rules:
+- "lede": 1-2 sentences a reader gets the gist from in two seconds.
+- "sections": use as FEW sections as the topic genuinely needs. A simple topic may be a SINGLE section. Do NOT invent sections to look thorough — empty structure is worse than none. Each "heading" is short and descriptive ("How it works", "Tradeoffs"). Each "body" is GitHub-flavored markdown: prose, lists, and a markdown TABLE when comparing options or listing specs.
+- "diagram": include ONLY when a visual genuinely aids understanding (a flow, a sequence, a state machine, an architecture). Omit the field entirely when prose is clearer. When present it is RAW mermaid source — a "flowchart", "sequenceDiagram", or "stateDiagram" with at most ~8 nodes and every node label in double quotes. No code fences.
+- "sources": cite about 5 relevant sources, each with a title and a URL.`;
+}
 
 /**
  * Normalize the raw `topics` field from any provider's activity output into a clean
@@ -76,26 +111,6 @@ export function stripFences(code: string): string {
 }
 
 /**
- * Normalize a provider's raw `graph` field into either a clean mermaid string or `null`.
- *
- * `null` is a FIRST-CLASS answer: it means "this work does not warrant a workflow graph" (a
- * single-step task, a quick Q&A, trivial linear work). The dashboard then shows no workflow
- * region at all instead of a thin one-node placeholder. Shared by all three providers so the
- * "when is there no workflow" rule lives in ONE place (this replaced the old per-provider
- * `?? FALLBACK_GRAPH` triplication).
- *
- * Returns null when: the field is missing/non-string, empty, whitespace-only, or reduces to
- * empty after fence-stripping. Otherwise returns the fence-stripped mermaid (which KEEPS the
- * intentional `:::goal`/`:::active` classDefs that drive the active-step highlight).
- */
-export function normalizeGraph(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  if (!raw.trim()) return null;
-  const stripped = stripFences(raw);
-  return stripped.trim() ? stripped : null;
-}
-
-/**
  * Normalize text for equality comparison (focus-history de-dup).
  *
  * Lower-cases, trims, and collapses all runs of whitespace to a single space so two
@@ -106,4 +121,93 @@ export function normalizeGraph(raw: unknown): string | null {
  */
 export function normalizeWhitespace(s: string): string {
   return s.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/** Validate the `sections` field of a parsed briefing into a clean ResearchSection[]. */
+function normalizeSections(raw: unknown): ResearchSection[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ResearchSection[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const rec = item as Record<string, unknown>;
+    const body = typeof rec.body === 'string' ? rec.body.trim() : '';
+    if (!body) continue; // a section with no body is noise
+    const heading = typeof rec.heading === 'string' ? rec.heading.trim().slice(0, HEADING_MAX) : '';
+    const section: ResearchSection = { heading, body };
+    const diagram = typeof rec.diagram === 'string' ? rec.diagram.trim() : '';
+    // Size guard here (parse-time DoS); type allowlist + sanitize happen in MermaidFigure.
+    if (diagram && diagram.length <= DIAGRAM_MAX) section.diagram = stripFences(diagram);
+    out.push(section);
+    if (out.length >= MAX_SECTIONS) break;
+  }
+  return out;
+}
+
+/** Validate the `sources` field of a parsed briefing into a clean ResearchLink[]. */
+function normalizeSources(raw: unknown): ResearchLink[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ResearchLink[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const rec = item as Record<string, unknown>;
+    const url = typeof rec.url === 'string' ? rec.url.trim() : '';
+    if (!/^https?:\/\//.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    const title = typeof rec.title === 'string' && rec.title.trim() ? rec.title.trim() : url;
+    out.push({ title, url });
+    if (out.length >= MAX_SOURCES) break;
+  }
+  return out;
+}
+
+/**
+ * Parse a provider's research output into a structured briefing. The model is asked for a JSON
+ * object `{ lede, sections, sources }`; this is the ONE place that parsing + validation lives,
+ * shared by all three providers (the parseActivityJson pattern, generalized).
+ *
+ * Defensive by design — the input is raw LLM text:
+ *  - strips accidental ```json fences, then tries a direct JSON.parse
+ *  - if that fails, extracts the first {...last} object (handles a preamble before the JSON)
+ *  - on ANY failure, or when no usable section survives validation, falls back to a SINGLE
+ *    section whose body is the raw text and whose heading is the topic. `/research` must never
+ *    500 on a malformed model response (cf. the claude-cli-research-500 learning).
+ */
+export function parseResearchSections(
+  raw: string,
+  topic: string,
+): { lede: string; sections: ResearchSection[]; sources: ResearchLink[] } {
+  const fallback = () => ({
+    lede: '',
+    sections: [{ heading: topic, body: raw.trim() || 'No briefing returned.' }],
+    sources: [] as ResearchLink[],
+  });
+
+  const cleaned = raw
+    .replace(/^```(?:json)?\r?\n?/m, '')
+    .replace(/```\s*$/m, '')
+    .trim();
+
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = JSON.parse(cleaned) as Record<string, unknown>;
+  } catch {
+    // Preamble or trailing prose around the JSON: extract the outermost {...}.
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        parsed = JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
+      } catch {
+        parsed = null;
+      }
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return fallback();
+
+  const sections = normalizeSections(parsed.sections);
+  if (sections.length === 0) return fallback();
+
+  const lede = typeof parsed.lede === 'string' ? parsed.lede.trim().slice(0, LEDE_MAX) : '';
+  return { lede, sections, sources: normalizeSources(parsed.sources) };
 }

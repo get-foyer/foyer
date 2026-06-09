@@ -22,7 +22,7 @@ The Map stays the synchronous read model; mutators mark a session dirty and a de
 flusher writes it through. This is the standard future persisted state follows.
 
 1. **Backend = one JSON file per session**, in a per-user data dir
-   (`~/.foyer-gate/sessions/<sha256(id)>.json`, override `FOYER_DATA_DIR`) — never the npm
+   (`~/.foyer-lobby/sessions/<sha256(id)>.json`, override `FOYER_DATA_DIR`) — never the npm
    install dir. **Not SQLite:** `better-sqlite3` is a native module (node-gyp install
    failures kill adoption) and `node:sqlite` needs Node 22.5+ and prints an experimental
    warning. JSON is a perfect fit for this workload and installs everywhere with zero deps.

@@ -38,11 +38,12 @@ import {
   existsSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import type { Session } from '../src/types.js';
+import type { Session, ResearchResult, ResearchLink, ResearchSection } from '../src/types.js';
 import { newSession } from '../src/types.js';
 
-/** Bumped when the persisted shape changes in a way `normalize()` must account for. */
-export const SESSION_SCHEMA_VERSION = 1;
+/** Bumped when the persisted shape changes in a way `normalize()` must account for.
+ *  v2: research moved from { summary } to { lede, sections[] } — normalizeResearchItem adapts old files. */
+export const SESSION_SCHEMA_VERSION = 2;
 
 /** Retention: keep at most this many sessions on disk (most-recently-started win). */
 export const MAX_SESSIONS = 50;
@@ -89,6 +90,32 @@ function fileFor(sessionsDir: string, sessionId: string): string {
  *   - working/waiting → interrupted (terminal), stamp finishedAt, clear waitingReason.
  *   - a stale `activityStatus: 'generating'` would spin the UI forever → reset to ready/idle.
  */
+/**
+ * Adapt one persisted research item to the current `{ topic, lede, sections[], links, ts }` shape.
+ * Sessions saved before the structured-briefing change carry a flat `summary` string — wrap it as
+ * a single section so old briefings still render as a (minimal) doc. Returns null for junk.
+ */
+export function normalizeResearchItem(raw: unknown): ResearchResult | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const topic = typeof r.topic === 'string' ? r.topic : '';
+  const ts = typeof r.ts === 'number' ? r.ts : Date.now();
+  const links = Array.isArray(r.links) ? (r.links as ResearchLink[]) : [];
+
+  if (Array.isArray(r.sections)) {
+    return {
+      topic,
+      lede: typeof r.lede === 'string' ? r.lede : '',
+      sections: r.sections as ResearchSection[],
+      links,
+      ts,
+    };
+  }
+  // Legacy shape: a single `summary` string → one section.
+  const summary = typeof r.summary === 'string' ? r.summary : '';
+  return { topic, lede: '', sections: [{ heading: topic, body: summary }], links, ts };
+}
+
 export function normalizeSession(raw: unknown): Session | null {
   if (!raw || typeof raw !== 'object') return null;
   const env = raw as Partial<Envelope>;
@@ -107,14 +134,15 @@ export function normalizeSession(raw: unknown): Session | null {
     sessionId: s.sessionId,
     prompts: Array.isArray(s.prompts) && s.prompts.length > 0 ? s.prompts : base.prompts,
     turnSeq: typeof s.turnSeq === 'number' ? s.turnSeq : base.turnSeq,
-    // Sessions persisted before this field existed (or with a malformed value) load as null —
-    // no workflow shown until the next activity tick re-decides. base default = null.
-    workflowTurnSeq:
-      typeof s.workflowTurnSeq === 'number' ? s.workflowTurnSeq : base.workflowTurnSeq,
     focusHistory: Array.isArray(s.focusHistory) ? s.focusHistory : base.focusHistory,
     touchPoints: Array.isArray(s.touchPoints) ? s.touchPoints : base.touchPoints,
-    research: Array.isArray(s.research) ? s.research : base.research,
+    research: Array.isArray(s.research)
+      ? s.research.map(normalizeResearchItem).filter((r): r is ResearchResult => r !== null)
+      : base.research,
     suggestedTopics: Array.isArray(s.suggestedTopics) ? s.suggestedTopics : base.suggestedTopics,
+    // Sessions persisted before pinning existed (or with a malformed value) load as unpinned.
+    // Guarding here keeps a non-number out of sortPinnedFirst, where `b - a` would yield NaN.
+    pinnedAt: typeof s.pinnedAt === 'number' ? s.pinnedAt : null,
   };
 
   if (merged.status === 'working' || merged.status === 'waiting') {
@@ -136,7 +164,14 @@ export function applyRetention(sessions: Session[], now: number): Session[] {
     return now - (s.finishedAt ?? s.startedAt) <= DONE_TTL_MS;
   });
   if (kept.length > MAX_SESSIONS) {
-    kept = [...kept].sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_SESSIONS);
+    // Pinned sessions are user-retained — exempt them from the newest-N cap so a pin survives
+    // restart (ADR 0004), then fill the remaining slots with the newest unpinned sessions.
+    const pinned = kept.filter((s) => s.pinnedAt != null);
+    const rest = kept
+      .filter((s) => s.pinnedAt == null)
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .slice(0, Math.max(0, MAX_SESSIONS - pinned.length));
+    kept = [...pinned, ...rest];
   }
   return kept;
 }

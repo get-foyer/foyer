@@ -20,12 +20,12 @@ vi.mock('./activity.js', () => ({
   recordTranscriptPath: vi.fn(),
   scheduleSummarize: vi.fn(),
   summarizeNow: vi.fn(),
+  stopTranscriptWatcher: vi.fn(),
   resetSummarizeBaseline: vi.fn(),
 }));
 
 import { handleHook } from './hooks.js';
-import { _resetStateForTest, getAllSessions, getSession, setActivity } from './state.js';
-import { isWorkflowVisible } from '../src/types.js';
+import { _resetStateForTest, getAllSessions, getSession, closeSession } from './state.js';
 import { broadcast } from './sse.js';
 import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './providers/internal.js';
 
@@ -266,44 +266,164 @@ describe('handleHook passthrough for genuine events', () => {
     expect(sessions[0].touchPoints).toHaveLength(1);
     expect(sessions[0].touchPoints[0].path).toBe('/src/feature.ts');
   });
-});
 
-// ---------------------------------------------------------------------------
-// ExitPlanMode → plan-mode workflow floor (markPlanned)
-// ---------------------------------------------------------------------------
-
-describe('handleHook ExitPlanMode → workflow floor', () => {
-  it('marks the turn planned so the workflow shows even when the model returns a null graph', async () => {
+  it('tool activity after a stale done state revives the session row', async () => {
+    const sessionId = 'stale-done-tool';
     await handleHook(
       fakeReq({
         hook_event_name: 'UserPromptSubmit',
-        session_id: 'plan-sess',
+        session_id: sessionId,
         cwd: '/home/user/project',
-        prompt: 'Build a thing with a plan',
+        prompt: 'Keep working',
       }),
       fakeRes(),
     );
-    // Agent approves the plan → PreToolUse(ExitPlanMode) → markPlanned for turn 1.
     await handleHook(
       fakeReq({
-        hook_event_name: 'PreToolUse',
-        session_id: 'plan-sess',
+        hook_event_name: 'Stop',
+        session_id: sessionId,
         cwd: '/home/user/project',
-        tool_name: 'ExitPlanMode',
-        tool_input: {},
       }),
       fakeRes(),
     );
-    // A summarize tick that draws NO graph still shows the workflow (the plan-mode floor).
-    setActivity('plan-sess', {
-      summary: 'getting started',
-      graph: null,
-      topics: [],
-      turnSeq: 1,
-      turnPrompt: 'Build a thing with a plan',
-      allowAppend: true,
-    });
-    expect(isWorkflowVisible(getSession('plan-sess')!)).toBe(true);
+    expect(getSession(sessionId)!.status).toBe('done');
+
+    vi.mocked(broadcast).mockClear();
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'PostToolUse',
+        session_id: sessionId,
+        cwd: '/home/user/project',
+        tool_name: 'Write',
+        tool_input: { file_path: '/src/live.ts' },
+      }),
+      fakeRes(),
+    );
+
+    const s = getSession(sessionId)!;
+    expect(s.status).toBe('working');
+    expect(s.finishedAt).toBeNull();
+    expect(s.touchPoints[0].path).toBe('/src/live.ts');
+    expect(broadcast).toHaveBeenCalledWith(
+      'task',
+      expect.objectContaining({ sessionId, prompt: 'Keep working' }),
+    );
+    expect(broadcast).toHaveBeenCalledWith(
+      'touch',
+      expect.objectContaining({ sessionId, path: '/src/live.ts' }),
+    );
+  });
+
+  it('does NOT revive a CLOSED (dismissed) session on late tool activity', async () => {
+    const sessionId = 'closed-no-revive';
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: sessionId,
+        cwd: '/home/user/project',
+        prompt: 'work',
+      }),
+      fakeRes(),
+    );
+    await handleHook(
+      fakeReq({ hook_event_name: 'Stop', session_id: sessionId, cwd: '/home/user/project' }),
+      fakeRes(),
+    );
+    expect(getSession(sessionId)!.status).toBe('done');
+    closeSession(sessionId); // user dismisses the tab; agent keeps running
+
+    vi.mocked(broadcast).mockClear();
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'PostToolUse',
+        session_id: sessionId,
+        cwd: '/home/user/project',
+        tool_name: 'Write',
+        tool_input: { file_path: '/src/live.ts' },
+      }),
+      fakeRes(),
+    );
+
+    const s = getSession(sessionId)!;
+    expect(s.closed).toBe(true); // stays dismissed
+    expect(s.status).not.toBe('working'); // not resurrected
+    expect(broadcast).not.toHaveBeenCalledWith('task', expect.objectContaining({ sessionId }));
+  });
+
+  it('does NOT revive a terminal INTERRUPTED session on late tool activity', async () => {
+    const sessionId = 'interrupted-no-revive';
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: sessionId,
+        cwd: '/home/user/project',
+        prompt: 'work',
+      }),
+      fakeRes(),
+    );
+    // Simulate crash-recovery terminal state (ADR 0002).
+    const before = getSession(sessionId)!;
+    before.status = 'interrupted';
+    before.finishedAt = 123;
+
+    vi.mocked(broadcast).mockClear();
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'PostToolUse',
+        session_id: sessionId,
+        cwd: '/home/user/project',
+        tool_name: 'Write',
+        tool_input: { file_path: '/src/live.ts' },
+      }),
+      fakeRes(),
+    );
+
+    const s = getSession(sessionId)!;
+    expect(s.status).toBe('interrupted'); // terminal state preserved
+    expect(s.finishedAt).toBe(123);
+    expect(broadcast).not.toHaveBeenCalledWith('task', expect.objectContaining({ sessionId }));
+  });
+
+  it('non-file tool activity after a stale done state revives the session row', async () => {
+    const sessionId = 'stale-done-shell';
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: sessionId,
+        cwd: '/home/user/project',
+        prompt: 'Run checks',
+      }),
+      fakeRes(),
+    );
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'Stop',
+        session_id: sessionId,
+        cwd: '/home/user/project',
+      }),
+      fakeRes(),
+    );
+    expect(getSession(sessionId)!.status).toBe('done');
+
+    vi.mocked(broadcast).mockClear();
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'PostToolUse',
+        session_id: sessionId,
+        cwd: '/home/user/project',
+        tool_name: 'Bash',
+        tool_input: { command: 'pnpm test' },
+      }),
+      fakeRes(),
+    );
+
+    const s = getSession(sessionId)!;
+    expect(s.status).toBe('working');
+    expect(s.finishedAt).toBeNull();
+    expect(broadcast).toHaveBeenCalledWith(
+      'task',
+      expect.objectContaining({ sessionId, prompt: 'Run checks' }),
+    );
   });
 });
 

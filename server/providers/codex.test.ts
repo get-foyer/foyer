@@ -19,18 +19,22 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe('parseCodexResearchOutput', () => {
-  it('extracts summary from agent_message with string content', async () => {
-    const lines = [
-      JSON.stringify({ item: { type: 'agent_message', content: 'This is the briefing.' } }),
-    ];
+  it('parses the agent_message briefing JSON into lede + sections', async () => {
+    const briefing = JSON.stringify({
+      lede: 'Short gist.',
+      sections: [{ heading: 'Overview', body: 'Body text.' }],
+      sources: [],
+    });
+    const lines = [JSON.stringify({ item: { type: 'agent_message', content: briefing } })];
     const eventsFile = join(tempDir, 'events.jsonl');
     await writeFile(eventsFile, lines.join('\n'), 'utf-8');
 
-    const result = await parseCodexResearchOutput(eventsFile);
-    expect(result.summary).toBe('This is the briefing.');
+    const result = await parseCodexResearchOutput(eventsFile, 'topic');
+    expect(result.lede).toBe('Short gist.');
+    expect(result.sections[0]).toMatchObject({ heading: 'Overview', body: 'Body text.' });
   });
 
-  it('extracts summary from agent_message with array content', async () => {
+  it('joins array-content text parts (non-JSON → single-section fallback, never throws)', async () => {
     const content = [
       { type: 'text', text: 'Part one. ' },
       { type: 'text', text: 'Part two.' },
@@ -39,13 +43,21 @@ describe('parseCodexResearchOutput', () => {
     const eventsFile = join(tempDir, 'events.jsonl');
     await writeFile(eventsFile, lines.join('\n'), 'utf-8');
 
-    const result = await parseCodexResearchOutput(eventsFile);
-    expect(result.summary).toBe('Part one. \nPart two.');
+    const result = await parseCodexResearchOutput(eventsFile, 'My Topic');
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0].heading).toBe('My Topic');
+    expect(result.sections[0].body).toContain('Part one.');
+    expect(result.sections[0].body).toContain('Part two.');
   });
 
-  it('extracts links from web_search events', async () => {
+  it('extracts links from web_search events (authoritative over model sources)', async () => {
+    const briefing = JSON.stringify({
+      lede: '',
+      sections: [{ heading: 'H', body: 'B' }],
+      sources: [{ title: 'Self-reported', url: 'https://ignored.example' }],
+    });
     const lines = [
-      JSON.stringify({ item: { type: 'agent_message', content: 'Summary.' } }),
+      JSON.stringify({ item: { type: 'agent_message', content: briefing } }),
       JSON.stringify({
         item: { type: 'web_search', url: 'https://example.com', title: 'Example' },
       }),
@@ -53,33 +65,34 @@ describe('parseCodexResearchOutput', () => {
     const eventsFile = join(tempDir, 'events.jsonl');
     await writeFile(eventsFile, lines.join('\n'), 'utf-8');
 
-    const result = await parseCodexResearchOutput(eventsFile);
-    expect(result.links).toHaveLength(1);
-    expect(result.links[0]).toEqual({ url: 'https://example.com', title: 'Example' });
+    const result = await parseCodexResearchOutput(eventsFile, 'topic');
+    expect(result.links).toEqual([{ url: 'https://example.com', title: 'Example' }]);
   });
 
-  it('falls back to URL extraction from summary when no web_search events', async () => {
-    const summary = 'See https://react.dev and https://vitejs.dev for details.';
-    const lines = [JSON.stringify({ item: { type: 'agent_message', content: summary } })];
+  it('uses the model-reported sources when there are no web_search events', async () => {
+    const briefing = JSON.stringify({
+      lede: '',
+      sections: [{ heading: 'H', body: 'B' }],
+      sources: [{ title: 'React', url: 'https://react.dev' }],
+    });
+    const lines = [JSON.stringify({ item: { type: 'agent_message', content: briefing } })];
     const eventsFile = join(tempDir, 'events.jsonl');
     await writeFile(eventsFile, lines.join('\n'), 'utf-8');
 
-    const result = await parseCodexResearchOutput(eventsFile);
-    expect(result.links.length).toBeGreaterThanOrEqual(2);
-    expect(result.links.some((l) => l.url === 'https://react.dev')).toBe(true);
-    expect(result.links.some((l) => l.url === 'https://vitejs.dev')).toBe(true);
+    const result = await parseCodexResearchOutput(eventsFile, 'topic');
+    expect(result.links).toEqual([{ title: 'React', url: 'https://react.dev' }]);
   });
 
   it('skips malformed JSONL lines and keeps processing', async () => {
     const lines = [
       '{BAD JSON',
-      JSON.stringify({ item: { type: 'agent_message', content: 'Valid summary.' } }),
+      JSON.stringify({ item: { type: 'agent_message', content: 'Valid prose.' } }),
     ];
     const eventsFile = join(tempDir, 'events.jsonl');
     await writeFile(eventsFile, lines.join('\n'), 'utf-8');
 
-    const result = await parseCodexResearchOutput(eventsFile);
-    expect(result.summary).toBe('Valid summary.');
+    const result = await parseCodexResearchOutput(eventsFile, 'topic');
+    expect(result.sections[0].body).toContain('Valid prose.');
   });
 });
 
@@ -93,11 +106,9 @@ describe('buildActivityPrompt', () => {
     prompts: [] as string[],
     recentTouchPoints: [] as { path: string; tool: string; ts: number }[],
     transcriptTail: '',
-    previousGraph: null as string | null,
     previousTopics: [] as { topic: string; reason: string }[],
     status: 'working' as 'working' | 'waiting' | 'done',
     waitingReason: null as string | null,
-    planned: false,
   };
 
   it('includes the user prompt in the output', () => {
@@ -128,43 +139,19 @@ describe('buildActivityPrompt', () => {
     expect(result).toContain(tail);
   });
 
-  it('requests JSON output with summary and graph fields', () => {
+  it('requests JSON output with summary and topics fields', () => {
     const result = buildActivityPrompt({ ...baseCtx, prompt: 'Test' });
     expect(result).toMatch(/summary/i);
-    expect(result).toMatch(/graph/i);
+    expect(result).toMatch(/topics/i);
   });
 
-  it('asks for a graph LR milestone storyline, append-only (not a graph TD tool trace)', () => {
+  it('does not ask for a workflow graph', () => {
     const result = buildActivityPrompt({ ...baseCtx, prompt: 'Test' });
-    expect(result).toContain('graph LR');
-    expect(result).not.toContain('graph TD');
-    expect(result).toMatch(/milestone/i);
-    expect(result).toMatch(/append-only/i);
+    expect(result).not.toMatch(/graph LR/i);
+    expect(result).not.toMatch(/:::goal|:::active|classDef/);
   });
 
-  it('lets the model return null when the work does not warrant a graph (not planned)', () => {
-    const result = buildActivityPrompt({ ...baseCtx, prompt: 'Test', planned: false });
-    expect(result).toMatch(/EITHER null/i);
-    expect(result).toMatch(/single-step|trivial|no real phases/i);
-  });
-
-  it('forces a graph (never null) when the agent exited plan mode this turn', () => {
-    const result = buildActivityPrompt({ ...baseCtx, prompt: 'Test', planned: true });
-    expect(result).toMatch(/APPROVED PLAN/i);
-    expect(result).toMatch(/do NOT return null/i);
-  });
-
-  it('embeds the previous storyline so the model extends it instead of redrawing', () => {
-    const prev = 'graph LR\n  G(["Fix login bug"]):::goal --> A["Diagnose"]:::active';
-    const result = buildActivityPrompt({
-      ...baseCtx,
-      prompt: 'Fix login bug',
-      previousGraph: prev,
-    });
-    expect(result).toContain(prev);
-  });
-
-  it('surfaces the waiting reason so the storyline can append a terminal chip', () => {
+  it('surfaces the waiting reason in the status line', () => {
     const result = buildActivityPrompt({
       ...baseCtx,
       prompt: 'Fix login bug',

@@ -1,10 +1,10 @@
 node_modules/
+.pnpm-store/
 dist/
 .env
 *.foyer-backup
 *.local
 .DS_Store
 .gstack/
-.pnpm-store/
 package-lock.json
 .claude/scheduled_tasks.lock

@@ -1,5 +1,5 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
@@ -9,6 +9,10 @@ export default defineConfig({
       '/hook': { target: 'http://localhost:4317', changeOrigin: true },
       '/events': { target: 'http://localhost:4317', changeOrigin: true },
       '/research': { target: 'http://localhost:4317', changeOrigin: true },
+      '/activity': { target: 'http://localhost:4317', changeOrigin: true },
+      '/prefetch': { target: 'http://localhost:4317', changeOrigin: true },
+      '/close': { target: 'http://localhost:4317', changeOrigin: true },
+      '/pin': { target: 'http://localhost:4317', changeOrigin: true },
       '/api': { target: 'http://localhost:4317', changeOrigin: true },
     },
   },
@@ -16,4 +20,4 @@ export default defineConfig({
     outDir: 'dist/public',
     sourcemap: false,
   },
-})
+});

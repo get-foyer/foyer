@@ -13,30 +13,49 @@ interface Props {
   /** Topic keys (trim+lowercase) whose research is PRIMED — prefetched and ready server-side, so
    *  a tap returns instantly. Drives the amber "ready" dot on the chip. */
   primedTopics: string[];
+  /** Topic keys (trim+lowercase) whose research is WARMING — a speculative prefetch is in flight.
+   *  Drives the pulsing amber ring that settles into the primed dot when ready. */
+  warmingTopics: string[];
   /** Open the full-width Research tab on the briefing with this timestamp. */
   onOpenResearch: (ts: number) => void;
 }
 
 /**
- * Deep Research LAUNCHER (lives in the right rail of the Focus view).
- *  - Topic chips: tap to run research (unchanged pipeline).
- *  - Ready-list: a compact index of completed briefings; tapping one opens the full-width
- *    `04 · RESEARCH` reading tab on that briefing. The full reading surface lives in
- *    `ResearchTab`, not here — the rail stays a launcher + "what's ready" glance.
+ * Deep Research LAUNCHER (right rail of the Focus view) — ONE unified list, no second section.
+ * A topic moves through the list in place rather than relocating to a separate "Ready to read" block:
+ *
+ *   suggested chip ──(warm)──► warming ring ──► primed dot ──(tap/resolve)──► briefing row
+ *                                                                              │
+ *                                            ready to read (amber) ◄───────────┘
+ *                                                   │ (open in Research tab)
+ *                                                   ▼
+ *                                            read (dimmed, no amber)
+ *
+ * Order (most actionable first): unread briefings → suggested topics → read briefings. The full
+ * reading surface lives in `ResearchTab`; the rail stays a launcher + "what's ready" glance.
+ * Amber appears only on warming / primed / unread-ready — never on a read row — so it stays a rare
+ * "live/ready" signal (DESIGN.md).
  */
 export function ResearchPanel({
   results,
   suggestedTopics,
   primedTopics,
+  warmingTopics,
   activityStatus,
   sessionId,
   onOpenResearch,
 }: Props) {
   const primed = new Set(primedTopics);
+  const warming = new Set(warmingTopics);
   // Topics with a research call in flight from THIS panel — keyed by topic string so a
   // chip stays disabled (and a double-click is a no-op) until its result lands via SSE.
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+
+  // results arrive newest-first; the unread/read split preserves that order within each group.
+  const unread = results.filter((r) => r.readAt == null);
+  const read = results.filter((r) => r.readAt != null);
+  const isEmpty = suggestedTopics.length === 0 && results.length === 0;
 
   const handleResearch = async (topic: string) => {
     if (pending.has(topic)) return; // double-click guard
@@ -67,87 +86,104 @@ export function ResearchPanel({
     }
   };
 
+  const briefingRow = (r: ResearchResult, isRead: boolean) => (
+    <li key={r.ts}>
+      <button
+        type="button"
+        className={`research-ready-row${isRead ? ' research-ready-row--read' : ''}`}
+        onClick={() => onOpenResearch(r.ts)}
+        title={`Open briefing: ${r.topic}`}
+        aria-label={`${r.topic} — ${isRead ? 'read' : 'ready to read'}`}
+      >
+        <span
+          className={`research-ready-row__dot${isRead ? ' research-ready-row__dot--read' : ''}`}
+          aria-hidden="true"
+        />
+        <span className="research-ready-row__topic">{r.topic}</span>
+        <time className="research-ready-row__ts">{new Date(r.ts).toLocaleTimeString()}</time>
+      </button>
+    </li>
+  );
+
   return (
     <section className="panel research-panel">
       <h2 className="panel__title">Deep Research</h2>
-      <p className="panel__subtitle">
-        Topics from your session — tap one to read up while you wait.
-      </p>
 
-      {suggestedTopics.length > 0 && (
-        <ul className="research-topics" aria-label="Suggested research topics">
-          {suggestedTopics.map((t) => {
-            const isPending = pending.has(t.topic);
-            // Primed = research already warmed in the background → this tap is instant.
-            const isPrimed = !isPending && primed.has(t.topic.trim().toLowerCase());
-            return (
-              <li key={t.topic}>
-                <button
-                  type="button"
-                  className="research-chip"
-                  onClick={() => handleResearch(t.topic)}
-                  disabled={isPending}
-                  title={isPrimed ? `${t.reason} · ready` : t.reason}
-                  aria-label={isPrimed ? `${t.topic} — ready` : undefined}
-                >
-                  <span className="research-chip__topic">{t.topic}</span>
-                  {t.reason && <span className="research-chip__reason">{t.reason}</span>}
-                  {isPrimed && (
-                    <span
-                      className="research-chip__primed"
-                      aria-hidden="true"
-                      title="Ready — tap is instant"
-                    />
-                  )}
-                  {isPending && <span className="spinner spinner--sm research-chip__spinner" />}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-
-      {suggestedTopics.length === 0 && <ResearchEmptyState activityStatus={activityStatus} />}
-
-      {error && (
-        <p className="research-panel__error" role="alert">
-          ⚠ {error}
+      <div className="research-panel__body">
+        <p className="panel__subtitle">
+          Briefings ready to read, and topics to dig into while you wait.
         </p>
-      )}
 
-      {results.length > 0 && (
-        <div className="research-ready-list">
-          <p className="research-ready-list__label">Ready to read</p>
-          <ul aria-label="Completed research briefings">
-            {results.map((r) => (
-              <li key={r.ts}>
-                <button
-                  type="button"
-                  className="research-ready-row"
-                  onClick={() => onOpenResearch(r.ts)}
-                  title={`Open briefing: ${r.topic}`}
-                >
-                  <span className="research-ready-row__dot" aria-hidden="true" />
-                  <span className="research-ready-row__topic">{r.topic}</span>
-                  <time className="research-ready-row__ts">
-                    {new Date(r.ts).toLocaleTimeString()}
-                  </time>
-                </button>
-              </li>
-            ))}
+        {isEmpty ? (
+          <ResearchEmptyState activityStatus={activityStatus} />
+        ) : (
+          <ul className="research-list" aria-label="Research">
+            {/* Most actionable first: a briefing that's already waiting for you. */}
+            {unread.map((r) => briefingRow(r, false))}
+
+            {suggestedTopics.map((t) => {
+              const isPending = pending.has(t.topic);
+              const key = t.topic.trim().toLowerCase();
+              // Primed = research already warmed in the background → this tap is instant.
+              const isPrimed = !isPending && primed.has(key);
+              // Warming = a speculative prefetch is in flight right now (settles into primed).
+              const isWarming = !isPending && !isPrimed && warming.has(key);
+              const status = isPrimed ? 'ready' : isWarming ? 'warming' : null;
+              return (
+                <li key={t.topic}>
+                  <button
+                    type="button"
+                    className="research-chip"
+                    onClick={() => handleResearch(t.topic)}
+                    disabled={isPending}
+                    title={status ? `${t.reason} · ${status}` : t.reason}
+                    aria-label={status ? `${t.topic} — ${status}` : undefined}
+                  >
+                    <span className="research-chip__topic">{t.topic}</span>
+                    {t.reason && <span className="research-chip__reason">{t.reason}</span>}
+                    {isPrimed && (
+                      <span
+                        className="research-chip__primed"
+                        aria-hidden="true"
+                        title="Ready — tap is instant"
+                      />
+                    )}
+                    {isWarming && (
+                      <span
+                        className="research-chip__warming"
+                        aria-hidden="true"
+                        title="Warming — prefetching in the background"
+                      />
+                    )}
+                    {isPending && <span className="spinner spinner--sm research-chip__spinner" />}
+                  </button>
+                </li>
+              );
+            })}
+
+            {/* Already read — dimmed, sunk to the bottom, no amber. */}
+            {read.map((r) => briefingRow(r, true))}
           </ul>
-        </div>
-      )}
+        )}
+
+        {error && (
+          <p className="research-panel__error" role="alert">
+            ⚠ {error}
+          </p>
+        )}
+      </div>
     </section>
   );
 }
 
 /**
- * Cold-start / empty copy for the chip area. The manual input box was removed, so this
- * is the only thing the user sees before topics arrive — it must be honest:
+ * Cold-start / empty copy for the list. The manual input box was removed, so this is the only
+ * thing the user sees before any topic or briefing exists — it must be honest:
  *  - generating → topics are actively being derived (spinner)
  *  - ready      → a tick ran and produced nothing worth suggesting
  *  - idle/error → no provider yet, or summarization failed — no spinner (don't imply work)
+ * Only shown when there are no topics AND no briefings (a session with briefings always renders
+ * the list, never this).
  */
 function ResearchEmptyState({ activityStatus }: { activityStatus: Session['activityStatus'] }) {
   if (activityStatus === 'generating') {
