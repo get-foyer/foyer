@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { readFile } from 'fs/promises';
+import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { configPath } from './server/paths.js';
-import { config as loadDotenv } from 'dotenv';
 
 const command = process.argv[2] ?? 'help';
 
@@ -60,17 +60,41 @@ export async function postHookEvent(event: string, raw: string, port: number): P
 }
 
 /**
+ * Resolve the dashboard port for the hook WITHOUT pulling in any node_modules
+ * dependency. The Codex hook runs `node dist/cli.js …` directly; if it imported
+ * `dotenv` at module load, a missing/half-installed node_modules (e.g. during
+ * `pnpm ci`) crashes the hook with ERR_MODULE_NOT_FOUND → exit 1 on every event.
+ * So we read FOYER_PORT from the environment, then parse it out of the generated
+ * `config.env` (simple KEY=VALUE) with built-ins only, defaulting to 4317.
+ *
+ * @internal Exported for tests.
+ */
+export function resolveHookPort(): number {
+  const fromEnv = parseInt(process.env.FOYER_PORT ?? '', 10);
+  if (Number.isFinite(fromEnv)) return fromEnv;
+  try {
+    const match = readFileSync(configPath(), 'utf-8').match(/^\s*FOYER_PORT\s*=\s*(\d+)/m);
+    if (match) return parseInt(match[1], 10);
+  } catch {
+    // No config file yet — fall through to the default.
+  }
+  return 4317;
+}
+
+/**
  * Codex lifecycle hook shell. Reads the event payload from stdin and forwards it
  * to the running dashboard. MUST always exit 0 — Codex treats any non-zero exit
  * as "hook (failed)" and surfaces it on every prompt/tool call. So every step is
  * wrapped: a failure logs ONE diagnostic line to stderr (so dropped events aren't
  * fully invisible) and we still exit 0.
+ *
+ * The entire hook path depends on Node built-ins only (no node_modules), so it
+ * survives dependency reinstalls — see resolveHookPort().
  */
 async function runCodexHook(): Promise<void> {
   const event = process.argv[4] ?? 'Unknown';
   try {
-    loadDotenv({ path: configPath() });
-    const port = parseInt(process.env.FOYER_PORT ?? '4317', 10);
+    const port = resolveHookPort();
 
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) {

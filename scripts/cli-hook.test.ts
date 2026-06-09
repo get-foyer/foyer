@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { postHookEvent } from '../cli.js';
+import { builtinModules } from 'module';
+import { readFileSync } from 'fs';
+import { mkdtempSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { postHookEvent, resolveHookPort } from '../cli.js';
 
 // ---------------------------------------------------------------------------
 // postHookEvent — pure Codex hook forwarder
@@ -63,5 +69,68 @@ describe('postHookEvent', () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
     vi.stubGlobal('fetch', fetchMock);
     await expect(postHookEvent('Stop', '{}', 4317)).rejects.toThrow(/ECONNREFUSED/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hook entrypoint must stay node_modules-free
+//
+// The Codex hook runs `node dist/cli.js …` directly. If cli.ts ever statically
+// imports a node_modules package again (e.g. `dotenv`), the hook crashes with
+// ERR_MODULE_NOT_FOUND whenever deps are mid-reinstall (pnpm ci). This guard
+// fails the moment a bare specifier creeps back into the top-level import set.
+// ---------------------------------------------------------------------------
+
+describe('cli.ts import surface', () => {
+  const builtins = new Set(builtinModules);
+
+  function isBuiltin(spec: string): boolean {
+    const bare = spec.startsWith('node:') ? spec.slice('node:'.length) : spec;
+    const root = bare.split('/')[0]; // fs/promises → fs
+    return builtins.has(bare) || builtins.has(root);
+  }
+
+  it('only statically imports Node builtins or relative paths (no node_modules)', () => {
+    const cliPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'cli.ts');
+    const src = readFileSync(cliPath, 'utf-8');
+    // Match `import ... from '<spec>'` / `export ... from '<spec>'` (static only;
+    // dynamic import() inside main() is allowed for the heavier subcommands).
+    const specs = [...src.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+['"]([^'"]+)['"]/gm)].map(
+      (m) => m[1],
+    );
+    expect(specs.length).toBeGreaterThan(0);
+    const external = specs.filter((s) => !s.startsWith('.') && !isBuiltin(s));
+    expect(external, `unexpected node_modules imports on the hook path: ${external}`).toEqual([]);
+  });
+});
+
+describe('resolveHookPort', () => {
+  const ORIG = process.env.FOYER_PORT;
+  const ORIG_CFG = process.env.FOYER_CONFIG_PATH;
+  afterEach(() => {
+    if (ORIG === undefined) delete process.env.FOYER_PORT;
+    else process.env.FOYER_PORT = ORIG;
+    if (ORIG_CFG === undefined) delete process.env.FOYER_CONFIG_PATH;
+    else process.env.FOYER_CONFIG_PATH = ORIG_CFG;
+  });
+
+  it('prefers FOYER_PORT from the environment', () => {
+    process.env.FOYER_PORT = '5005';
+    expect(resolveHookPort()).toBe(5005);
+  });
+
+  it('parses FOYER_PORT out of the config.env file when env is unset', () => {
+    delete process.env.FOYER_PORT;
+    const dir = mkdtempSync(join(tmpdir(), 'foyer-cfg-'));
+    const cfg = join(dir, 'config.env');
+    writeFileSync(cfg, '# Foyer\nFOYER_PORT=4999\nFOYER_PROVIDER=codex\n', 'utf-8');
+    process.env.FOYER_CONFIG_PATH = cfg;
+    expect(resolveHookPort()).toBe(4999);
+  });
+
+  it('defaults to 4317 when neither env nor config file is available', () => {
+    delete process.env.FOYER_PORT;
+    process.env.FOYER_CONFIG_PATH = join(tmpdir(), 'foyer-does-not-exist', 'config.env');
+    expect(resolveHookPort()).toBe(4317);
   });
 });
