@@ -1,4 +1,5 @@
 # Why Foyer?
+When using AI Agents for development, I often run into this problem where the wait time for LLMs to complete their work breaks my focus.
 This is a post from [HackerNews](https://news.ycombinator.com/item?id=46934404) completely resonated with me
 
 > For me the fatigue is a little different— it’s the constant switching between doing a little bit of work/coding/reviewing and then stopping to wait for the llm to generate something.
@@ -183,19 +184,6 @@ FOYER_ANTHROPIC_MODEL=claude-haiku-4-5
 ```
 
 Session data is stored in `~/.foyer` by default. Set `FOYER_DATA_DIR` to override it.
-
----
-
-## Publishing
-
-Release candidates should pass:
-
-```bash
-pnpm run ci
-npm publish --dry-run --access public
-```
-
-The package publishes the compiled `dist/` runtime, `README.md`, `LICENSE`, `SECURITY.md`, and `package.json`. Source checkout files, tests, local config, and generated development artifacts are excluded from the npm tarball.
 
 ---
 
