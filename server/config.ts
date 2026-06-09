@@ -2,8 +2,10 @@ import { config as loadDotenv } from 'dotenv';
 import { resolve, join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
+import { configPath } from './paths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+loadDotenv({ path: configPath() });
 loadDotenv({ path: resolve(__dirname, '..', '.env') });
 
 export type ProviderKind = 'codex' | 'claude-cli' | 'anthropic-api';

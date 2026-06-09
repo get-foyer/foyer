@@ -38,7 +38,7 @@ export function TaskHeader({ session, connectionStatus, provider }: Props) {
           <span className="task-header__icon">🚪</span>
           <span className="task-header__waiting">Waiting for an agent task…</span>
           <span className="task-header__hint">
-            Start a Claude Code session and submit a prompt.
+            Start a Claude Code or Codex session and submit a prompt.
           </span>
         </div>
         <div className="task-header__meta">

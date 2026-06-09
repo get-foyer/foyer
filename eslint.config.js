@@ -13,9 +13,10 @@ export default tseslint.config(
 
   // Node.js globals for server-side JS/MJS files
   {
-    files: ['server/**/*.mjs', 'server/**/*.js', 'scripts/**/*.js'],
+    files: ['server/**/*.mjs', 'server/**/*.js', 'scripts/**/*.js', 'scripts/**/*.mjs'],
     languageOptions: {
       globals: {
+        console: 'readonly',
         process: 'readonly',
         Buffer: 'readonly',
         fetch: 'readonly',
