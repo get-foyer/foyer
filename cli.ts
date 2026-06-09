@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from 'fs/promises';
-import { readFileSync } from 'fs';
+import { readFileSync, realpathSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { configPath } from './server/paths.js';
@@ -154,7 +154,21 @@ async function main(): Promise<void> {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+function isEntrypoint(argvPath: string | undefined): boolean {
+  if (!argvPath) return false;
+
+  if (import.meta.url === pathToFileURL(argvPath).href) {
+    return true;
+  }
+
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(argvPath)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isEntrypoint(process.argv[1])) {
   main().catch((err: unknown) => {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);

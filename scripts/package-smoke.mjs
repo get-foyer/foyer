@@ -2,8 +2,9 @@
 import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import { mkdtempSync } from 'fs';
+import { symlinkSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 
 const requiredFiles = [
   'dist/cli.js',
@@ -28,6 +29,15 @@ for (const file of requiredFiles) {
 const help = execFileSync(process.execPath, ['dist/cli.js', '--help'], { encoding: 'utf-8' });
 if (!help.includes('foyer setup') || !help.includes('foyer start')) {
   console.error('CLI help output is missing expected commands.');
+  process.exit(1);
+}
+
+const shimDir = mkdtempSync(join(tmpdir(), 'foyer-bin-smoke-'));
+const shimPath = join(shimDir, 'foyer');
+symlinkSync(resolve('dist/cli.js'), shimPath);
+const shimHelp = execFileSync(process.execPath, [shimPath, '--help'], { encoding: 'utf-8' });
+if (!shimHelp.includes('foyer setup') || !shimHelp.includes('foyer start')) {
+  console.error('CLI help output is missing expected commands when run through a bin symlink.');
   process.exit(1);
 }
 

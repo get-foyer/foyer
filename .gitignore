@@ -8,3 +8,4 @@ dist/
 .gstack/
 package-lock.json
 .claude/scheduled_tasks.lock
+.foyer
