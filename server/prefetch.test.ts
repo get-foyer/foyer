@@ -380,8 +380,8 @@ describe('schedulePrefetch + warm-loop', () => {
   });
 });
 
-describe('TTL', () => {
-  it('#10 ready entry past TTL reads as a miss', async () => {
+describe('entry longevity (no TTL — lives as long as its chip is suggested)', () => {
+  it('#10 an aged ready entry is still primed and serves an instant hit', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-06T00:00:00Z'));
     startSession('s1', 'goal');
@@ -391,9 +391,68 @@ describe('TTL', () => {
     await flush();
     expect(getPrimedTopics('s1')).toEqual(['a']);
 
-    vi.setSystemTime(new Date('2026-06-06T00:20:00Z')); // +20min > 15min TTL
-    expect(getPrimedTopics('s1')).toEqual([]);
+    // Far past the old 15-min TTL: a briefing is a point-in-time answer, not mutable state, so it
+    // must still be primed and serve instantly (no expiry → the amber dot never lies on a tap).
+    vi.setSystemTime(new Date('2026-06-06T06:00:00Z')); // +6h
+    expect(getPrimedTopics('s1')).toEqual(['a']);
+    const hit = await takePrefetched('s1', 'a');
+    expect(hit?.sections[0].body).toBe('briefing');
+  });
+
+  it('#10b regression: a ready entry below top-N but still suggested SURVIVES churn-prune', async () => {
+    // The previously-silent bug: a primed chip that slid below the top-3 prefetch budget (but
+    // stayed a visible chip) lost its warmed entry while the amber dot stayed lit → tap fell
+    // through to a live ~20s research. It must now survive and serve instantly.
+    setTopics(3);
+    startSession('s1', 'goal');
+    const p = makeProvider();
+    schedulePrefetch('s1', topics('a')); // warm 'a' as the sole top topic
+    p.settle('a');
+    await flush();
+    expect(getPrimedTopics('s1')).toEqual(['a']);
+
+    // New activity pushes 'a' to rank 4 — still suggested, just below the top-3 prefetch budget.
+    schedulePrefetch('s1', topics('b', 'c', 'd', 'a'));
+    await flush();
+
+    expect(getPrimedTopics('s1')).toContain('a'); // dot stays honest
+    const hit = await takePrefetched('s1', 'a');
+    expect(hit?.sections[0].body).toBe('briefing'); // instant hit, research not re-run for 'a'
+  });
+
+  it('#10c a ready entry whose topic LEFT suggestedTopics entirely is evicted', async () => {
+    startSession('s1', 'goal');
+    const p = makeProvider();
+    schedulePrefetch('s1', topics('a'));
+    p.settle('a');
+    await flush();
+    expect(getPrimedTopics('s1')).toEqual(['a']);
+
+    // 'a' is no longer suggested at all (its chip vanished) → its warmed entry is pruned.
+    schedulePrefetch('s1', topics('b', 'c'));
+    await flush();
+    expect(getPrimedTopics('s1')).not.toContain('a');
     expect(await takePrefetched('s1', 'a')).toBeNull();
+  });
+
+  it('#10d growth bound: ready entries per session never exceed the suggested set', async () => {
+    // Memory bound is MAX_TOPICS (6 suggested/session), NOT TTL. Rotate a fresh top-1 topic each
+    // schedule while keeping older warmed topics in the suggested list; assert retained ready
+    // entries stay bounded by the suggested count and don't get evicted early.
+    setTopics(1); // warm exactly one topic per schedule for deterministic settling
+    startSession('s1', 'goal');
+    const p = makeProvider();
+    const all = ['t1', 't2', 't3', 't4', 't5', 't6'];
+    for (let i = 0; i < all.length; i++) {
+      // Newest topic is top-1 (warmed); every topic so far stays in the suggested list.
+      schedulePrefetch('s1', topics(all[i], ...all.slice(0, i)));
+      await flush();
+      p.settle(all[i]);
+      await flush();
+    }
+    const primed = getPrimedTopics('s1');
+    expect(primed.length).toBeLessThanOrEqual(all.length); // bounded by the ≤6 suggested set
+    expect(primed.length).toBe(all.length); // all survived — none evicted while still suggested
   });
 });
 
