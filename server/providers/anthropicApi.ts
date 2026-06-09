@@ -19,7 +19,7 @@ export class AnthropicApiProvider implements LlmProvider {
     if (!this.client) {
       if (!cfg.anthropicApiKey) {
         throw new Error(
-          'ANTHROPIC_API_KEY is not set. Run `npm run setup` to configure your API key.',
+          'ANTHROPIC_API_KEY is not set. Run `foyer setup` to configure your API key.',
         );
       }
       this.client = new Anthropic({ apiKey: cfg.anthropicApiKey });
