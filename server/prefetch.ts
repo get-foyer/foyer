@@ -9,10 +9,15 @@
  *
  * Entry lifecycle (one global single-flight loop; at most one speculative research in flight):
  *
- *   schedulePrefetch ─► [queued] ──(loop; yields while summarizing)──► [running] ──ok──► [ready] ──tap/TTL──► (evict)
+ *   schedulePrefetch ─► [queued] ──(loop; yields while summarizing)──► [running] ──ok──► [ready] ──tap/topic-unsuggested──► (evict)
  *                          │                                              │ error/stale-gen
  *                          │ tap (not started)                           └─► resolve(null) ─► (evict) ─► tap runs live
  *                          └── tap ─► drop + resolve(null) ─► tap runs live
+ *
+ *   A `ready` entry has NO expiry: it lives until the tap consumes it OR its topic leaves the
+ *   session's suggested set (churn-prune drops it the moment the chip vanishes). The warmed
+ *   briefing is a point-in-time answer, not mutable state, so holding it as long as the chip is
+ *   shown keeps the amber "primed" dot honest by construction (the entry ⇔ the chip).
  *   2 consecutive errors ─► stop scheduling this session until a success / new topics
  *   clearPrefetch / supersede ─► bump generation ─► a late result is discarded, never stored/broadcast
  *
@@ -35,9 +40,6 @@ import { isSummarizing } from './activity.js';
 import { broadcast } from './sse.js';
 import { cfg } from './config.js';
 
-/** How long a warmed briefing stays fresh. Web-search-backed, so staleness of the topic
- *  briefing (not the agent's state) — 15 min is plenty and never serves a wrong-but-old result. */
-const TTL_MS = 15 * 60_000;
 /** After this many consecutive prefetch failures for a session, stop scheduling it (a down /
  *  misconfigured provider must not re-spawn failing subprocesses every poll). */
 const MAX_CONSECUTIVE_FAILURES = 2;
@@ -57,8 +59,6 @@ interface Entry {
   promise: Promise<ProviderResearchResult | null>;
   resolve: (v: ProviderResearchResult | null) => void;
   result?: ProviderResearchResult;
-  /** When the entry became `ready` (for TTL). */
-  ts?: number;
 }
 
 // sessionId -> topicKey -> Entry
@@ -113,11 +113,15 @@ export function schedulePrefetch(sessionId: string, topics: SuggestedTopic[]): v
 
   const m = sessionMap(sessionId);
   const wanted = topics.slice(0, cfg.prefetchTopics);
-  const wantedKeys = new Set(wanted.map((t) => topicKey(t.topic)));
+  // Prune keys off the FULL suggested set (every visible chip), NOT the top-N prefetch budget — so
+  // a warmed `ready` entry lives exactly as long as its chip is suggested, keeping the amber dot
+  // honest by construction. (`wanted` below still gates what gets newly *queued*, so the top-N
+  // speculative-spend bound at queue-time is unchanged.) Mirrors the client's `pruneVanished`.
+  const suggestedKeys = new Set(topics.map((t) => topicKey(t.topic)));
 
   // Churn-prune: drop ready AND queued entries whose topic is no longer suggested (not running).
   for (const [k, e] of m) {
-    if (!wantedKeys.has(k) && e.status !== 'running') {
+    if (!suggestedKeys.has(k) && e.status !== 'running') {
       if (e.status === 'queued') e.resolve(null);
       m.delete(k);
       counters.wasted++;
@@ -158,7 +162,7 @@ export function schedulePrefetch(sessionId: string, topics: SuggestedTopic[]): v
 /**
  * Consume a warmed result for a tap. `ready` → instant + evict; `running` → attach (wait only
  * the remainder); `queued` → drop it and return null so the caller runs it live (no waiting
- * behind the speculative loop). miss / expired / errored → null.
+ * behind the speculative loop). miss / errored → null.
  */
 export async function takePrefetched(
   sessionId: string,
@@ -172,13 +176,13 @@ export async function takePrefetched(
 
   if (e.status === 'ready') {
     m.delete(k);
-    if (e.result && e.ts && Date.now() - e.ts <= TTL_MS) {
+    if (e.result) {
       counters.hit++;
       counters.consumed++;
       logStats('hit', topic);
       return e.result;
     }
-    counters.wasted++; // expired
+    counters.wasted++; // ready with no result (defensive — runLoop only sets ready WITH a result)
     return null;
   }
 
@@ -219,15 +223,16 @@ export function clearPrefetch(sessionId: string): void {
   if (activePrefetchSessionId === sessionId) activePrefetchSessionId = null;
 }
 
-/** Currently-`ready`, non-expired topics for a session (original text). Used by the SSE
- *  reconnect replay (injected into sse.ts, so sse.ts never imports this module). */
+/** Currently-`ready` topics for a session (original text). Used by the SSE reconnect replay
+ *  (injected into sse.ts, so sse.ts never imports this module). A `ready` entry lives exactly as
+ *  long as its topic stays suggested (churn-prune evicts it the moment the chip vanishes), so this
+ *  never reports a primed dot the cache can't actually serve. */
 export function getPrimedTopics(sessionId: string): string[] {
   const m = cache.get(sessionId);
   if (!m) return [];
-  const now = Date.now();
   const out: string[] = [];
   for (const e of m.values()) {
-    if (e.status === 'ready' && e.ts && now - e.ts <= TTL_MS) out.push(e.topic);
+    if (e.status === 'ready') out.push(e.topic);
   }
   return out;
 }
@@ -294,7 +299,6 @@ async function runLoop(): Promise<void> {
       if (result && current) {
         entry.status = 'ready';
         entry.result = result;
-        entry.ts = Date.now();
         entry.resolve(result);
         failures.set(sid, 0);
         broadcast('research_primed', { sessionId: sid, topic: entry.topic });

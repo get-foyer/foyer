@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Research "ready" dot no longer lies.** An amber-dotted topic chip now always opens its
+  briefing instantly instead of sometimes showing a ~20s loading spinner. The warmed briefing
+  used to expire on a 15-minute timer (and got dropped when a topic slipped below the top-3
+  prefetch budget) while the dot stayed lit, so tapping a stale dot fell through to a fresh live
+  search. A prefetched briefing is a point-in-time answer, not perishable state, so it now lives
+  exactly as long as its chip is on screen — the dot and the cached result stay in lockstep.
+
 ### Removed
 
 - **Live Files** panel (the `02 · TOUCH POINTS` module). File operations are no longer

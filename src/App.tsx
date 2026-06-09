@@ -39,7 +39,9 @@ type State = {
   /** Per-session set of topic keys whose research is PRIMED (prefetched + ready server-side) →
    *  amber "ready" dot on the chip. Kept separate from the persisted Session (ephemeral, derived
    *  from `research_primed` SSE events). Reset on every snapshot and rebuilt from the replay, so
-   *  a dot can never outlive a server restart / TTL expiry it no longer reflects. */
+   *  a dot can never outlive a server restart it no longer reflects. Between snapshots the dot is
+   *  cleared by `pruneVanished` when its chip leaves `suggestedTopics` — the server holds the
+   *  warmed result for exactly that long (no TTL), so dot and cache stay in lockstep. */
   primedTopics: Record<string, string[]>;
   /** Per-session set of topic keys whose research is WARMING (a speculative prefetch is in flight
    *  server-side) → pulsing amber ring on the chip, which settles into the primed dot when ready.
