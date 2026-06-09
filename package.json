@@ -1,12 +1,24 @@
 {
-  "name": "foyer-gate",
+  "name": "@getfoyer/lobby",
   "version": "0.1.0",
-  "description": "A pull-forward dashboard that turns Claude Code agent waits into focused, in-context time.",
+  "description": "A local focus and learning dashboard for AI agent sessions.",
   "type": "module",
+  "main": "./dist/cli.js",
+  "bin": {
+    "foyer": "dist/cli.js",
+    "foyer-lobby": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
   "scripts": {
     "dev": "concurrently -k -n server,vite -c cyan,magenta \"tsx watch server/index.ts\" \"vite\"",
-    "build": "vite build",
-    "start": "NODE_ENV=production tsx server/index.ts",
+    "build": "vite build && pnpm build:server",
+    "build:server": "tsc -p tsconfig.build.json && node scripts/build-server-assets.mjs",
+    "start": "NODE_ENV=production node dist/server/index.js",
     "setup": "tsx scripts/setup.ts",
     "uninstall": "tsx scripts/uninstall.ts",
     "typecheck": "tsc --noEmit",
@@ -16,8 +28,9 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
-    "prepare": "husky"
+    "package:smoke": "node scripts/package-smoke.mjs",
+    "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm package:smoke",
+    "prepare": "node scripts/husky-prepare.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.55.0",
@@ -59,6 +72,22 @@
     "node": ">=18.0.0"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/getfoyer/lobby.git"
+  },
+  "bugs": {
+    "url": "https://github.com/getfoyer/lobby/issues"
+  },
+  "homepage": "https://github.com/getfoyer/lobby#readme",
+  "keywords": [
+    "ai-agent",
+    "claude-code",
+    "codex",
+    "developer-tools",
+    "dashboard",
+    "local-first"
+  ],
   "lint-staged": {
     "*.{ts,tsx}": [
       "eslint --fix",

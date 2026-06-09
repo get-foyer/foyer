@@ -1,5 +1,5 @@
 /**
- * Safely merge / unmerge Foyer Gate hooks into a Claude Code settings.json
+ * Safely merge / unmerge Foyer Lobby hooks into a Claude Code settings.json
  * and a Codex config.toml.
  *
  * Rules:
@@ -143,9 +143,14 @@ export async function uninstallHooks(settingsPath: string, port: number): Promis
 // Codex (TOML config)
 // ---------------------------------------------------------------------------
 
-/** The shim command entry we install for each Codex event. */
-function codexHookCommand(shimPath: string, port: number, event: string): string {
-  return `node ${shimPath} ${port} ${event}`;
+function shellQuoteArg(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** The CLI command entry we install for each Codex event.
+ * @internal Exported for tests. */
+export function codexHookCommand(event: string, commandParts: string[] = ['foyer']): string {
+  return [...commandParts, 'hook', 'codex', event].map(shellQuoteArg).join(' ');
 }
 
 /**
@@ -155,12 +160,11 @@ function codexHookCommand(shimPath: string, port: number, event: string): string
 const CODEX_EVENTS = ['PermissionRequest', 'UserPromptSubmit', 'PostToolUse', 'Stop'] as const;
 
 /** Marker embedded in Codex entries so we can find and remove them. */
-const FOYER_MARKER = 'foyer-gate-managed';
+const FOYER_MARKER = 'foyer-lobby-managed';
 
 export async function installCodexHooks(
   configPath: string,
-  shimPath: string,
-  port: number,
+  commandParts: string[] = ['foyer'],
 ): Promise<void> {
   await ensureDir(configPath);
 
@@ -199,8 +203,8 @@ export async function installCodexHooks(
       );
     });
     // Build our entry
-    const command = `${codexHookCommand(shimPath, port, event)} # ${FOYER_MARKER}`;
-    filtered.push({ hooks: [{ type: 'command', command }] });
+    const hookCommand = `${codexHookCommand(event, commandParts)} # ${FOYER_MARKER}`;
+    filtered.push({ hooks: [{ type: 'command', command: hookCommand }] });
     hooks[event] = filtered;
   }
 

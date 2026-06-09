@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { installHooks, uninstallHooks, installCodexHooks, uninstallCodexHooks } from './install.js';
+import {
+  installHooks,
+  uninstallHooks,
+  installCodexHooks,
+  uninstallCodexHooks,
+  codexHookCommand,
+} from './install.js';
 
 let tempDir: string;
 let settingsPath: string;
@@ -146,12 +152,21 @@ beforeEach(async () => {
   codexConfigPath = join(tempDir, 'config.toml');
 });
 
-const SHIM_PATH = '/abs/path/server/codex-hook.mjs';
-const PORT = 4317;
+const COMMAND = ['/usr/local/bin/node', '/usr/local/lib/node_modules/@getfoyer/lobby/dist/cli.js'];
 
 describe('installCodexHooks', () => {
+  it('quotes the command and event in the installed command', () => {
+    const command = codexHookCommand('Stop', [
+      '/usr/local/bin/node',
+      "/Users/dennis/Foyer's App/dist/cli.js",
+    ]);
+    expect(command).toBe(
+      "'/usr/local/bin/node' '/Users/dennis/Foyer'\\''s App/dist/cli.js' 'hook' 'codex' 'Stop'",
+    );
+  });
+
   it('creates a TOML file with features.hooks = true and hook entries', async () => {
-    await installCodexHooks(codexConfigPath, SHIM_PATH, PORT);
+    await installCodexHooks(codexConfigPath, COMMAND);
     const raw = await readFile(codexConfigPath, 'utf-8');
     // Should have hooks enabled
     expect(raw).toContain('hooks = true');
@@ -160,24 +175,26 @@ describe('installCodexHooks', () => {
     expect(raw).toContain('UserPromptSubmit');
     expect(raw).toContain('PostToolUse');
     expect(raw).toContain('Stop');
-    // Command should reference the shim and our marker
-    expect(raw).toContain(SHIM_PATH);
-    expect(raw).toContain('foyer-gate-managed');
+    // Command should reference the stable CLI hook and our marker
+    expect(raw).toContain(COMMAND[1]);
+    expect(raw).toContain("'hook'");
+    expect(raw).toContain("'codex'");
+    expect(raw).toContain('foyer-lobby-managed');
   });
 
   it('is idempotent — running twice does not duplicate entries', async () => {
-    await installCodexHooks(codexConfigPath, SHIM_PATH, PORT);
-    await installCodexHooks(codexConfigPath, SHIM_PATH, PORT);
+    await installCodexHooks(codexConfigPath, COMMAND);
+    await installCodexHooks(codexConfigPath, COMMAND);
     const raw = await readFile(codexConfigPath, 'utf-8');
     // The marker should appear exactly once per event (4 events)
-    const markerOccurrences = (raw.match(/foyer-gate-managed/g) ?? []).length;
+    const markerOccurrences = (raw.match(/foyer-lobby-managed/g) ?? []).length;
     expect(markerOccurrences).toBe(4); // one per event
   });
 
   it('preserves unrelated TOML keys', async () => {
     const existing = `[openai]\napi_key = "sk-test"\n\n[settings]\nmodel = "gpt-4"\n`;
     await writeFile(codexConfigPath, existing, 'utf-8');
-    await installCodexHooks(codexConfigPath, SHIM_PATH, PORT);
+    await installCodexHooks(codexConfigPath, COMMAND);
     const raw = await readFile(codexConfigPath, 'utf-8');
     expect(raw).toContain('sk-test');
     expect(raw).toContain('gpt-4');
@@ -185,13 +202,13 @@ describe('installCodexHooks', () => {
 
   it('creates a .foyer-backup of the original file', async () => {
     await writeFile(codexConfigPath, '[original]\nkey = "value"\n', 'utf-8');
-    await installCodexHooks(codexConfigPath, SHIM_PATH, PORT);
+    await installCodexHooks(codexConfigPath, COMMAND);
     const backup = await readFile(codexConfigPath + '.foyer-backup', 'utf-8');
     expect(backup).toContain('key = "value"');
   });
 
   it('works without a pre-existing config (first-time install)', async () => {
-    await expect(installCodexHooks(codexConfigPath, SHIM_PATH, PORT)).resolves.not.toThrow();
+    await expect(installCodexHooks(codexConfigPath, COMMAND)).resolves.not.toThrow();
     const raw = await readFile(codexConfigPath, 'utf-8');
     expect(raw).toContain('PermissionRequest');
   });
@@ -201,13 +218,13 @@ describe('uninstallCodexHooks', () => {
   it('removes our hook entries, leaving other config intact', async () => {
     const existing = `[openai]\napi_key = "sk-test"\n`;
     await writeFile(codexConfigPath, existing, 'utf-8');
-    await installCodexHooks(codexConfigPath, SHIM_PATH, PORT);
+    await installCodexHooks(codexConfigPath, COMMAND);
 
     await uninstallCodexHooks(codexConfigPath);
     const raw = await readFile(codexConfigPath, 'utf-8');
 
     // Our marker is gone
-    expect(raw).not.toContain('foyer-gate-managed');
+    expect(raw).not.toContain('foyer-lobby-managed');
     // Foreign config preserved
     expect(raw).toContain('sk-test');
   });

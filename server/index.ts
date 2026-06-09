@@ -56,7 +56,7 @@ app.post('/research', async (req, res) => {
   const provider = getActiveProvider();
   if (!provider) {
     res.status(503).json({
-      error: 'No LLM provider configured. Run `npm run setup` to set one up.',
+      error: 'No LLM provider configured. Run `foyer setup` to set one up.',
     });
     return;
   }
@@ -104,7 +104,7 @@ app.post('/activity', (req, res) => {
   const provider = getActiveProvider();
   if (!provider) {
     res.status(503).json({
-      error: 'No LLM provider configured. Run `npm run setup` to set one up.',
+      error: 'No LLM provider configured. Run `foyer setup` to set one up.',
     });
     return;
   }
@@ -152,7 +152,7 @@ if (cfg.isDev) {
     );
   });
 } else {
-  const publicDir = join(__dirname, '..', 'dist', 'public');
+  const publicDir = join(__dirname, '..', 'public');
   if (!existsSync(join(publicDir, 'index.html'))) {
     // Build output is missing — serve a helpful message instead of a raw ENOENT
     app.get('*', (_req, res) => {
@@ -161,7 +161,7 @@ if (cfg.isDev) {
         .send(
           '<html><body style="font-family:monospace;padding:2rem">' +
             '<h2>Dashboard not built</h2>' +
-            '<p>Run <code>npm run build</code> first, then <code>npm start</code>.</p>' +
+            '<p>Run <code>pnpm build</code> first, then <code>foyer start</code>.</p>' +
             '</body></html>',
         );
     });
@@ -213,7 +213,7 @@ async function boot() {
     if (!available) {
       console.warn(
         `⚠  Provider "${cfg.provider}" is not available. ` +
-          `Graph generation and research will fail. Run \`npm run setup\` to reconfigure.`,
+          `Activity summaries and research will fail. Run \`npm run setup\` to reconfigure.`,
       );
     } else {
       console.log(`✓ LLM provider: ${cfg.provider}`);
@@ -240,9 +240,9 @@ async function boot() {
     if (err.code === 'EADDRINUSE') {
       console.error(
         `\n✗ Port ${cfg.port} is already in use.\n` +
-          `  Another Foyer Gate (or another process) may be running on that port.\n` +
+          `  Another Foyer Lobby (or another process) may be running on that port.\n` +
           `  → Stop the other process, or use a different port:\n` +
-          `    FOYER_PORT=<port> npm start\n`,
+          `    FOYER_PORT=<port> foyer start\n`,
       );
     } else {
       console.error('✗ Server error:', err);

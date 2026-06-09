@@ -44,7 +44,7 @@ interface HookPayload {
 }
 
 // ---------------------------------------------------------------------------
-// Codex command-hook envelope — the codex-hook.mjs shim wraps Codex payloads
+// Codex command-hook envelope — the `foyer hook codex` wraps Codex payloads
 // as { source:'codex', event:<CodexEvent>, payload:<raw> }.
 // ---------------------------------------------------------------------------
 
