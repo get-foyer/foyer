@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "2-4 sentences of markdown describing what the agent is doing right now. Present tense, no preamble."
+    },
+    "topics": {
+      "type": "array",
+      "description": "3-6 research topics worth reading up on, derived from the agent's current work (libraries/APIs in play, concepts, error messages, unfamiliar terms). Extraction only — do NOT search the web. Skip the trivial/obvious. Keep stable vs the previous topics unless the focus has shifted. Empty array if nothing is worth suggesting.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string",
+            "description": "A concise, searchable research topic (<=120 chars), e.g. \"React useTransition hook\"."
+          },
+          "reason": {
+            "type": "string",
+            "description": "One short line of provenance grounding the topic in the work (<=160 chars), e.g. \"you're editing App.tsx which uses useTransition\"."
+          }
+        },
+        "required": ["topic", "reason"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["summary", "topics"],
+  "additionalProperties": false
+}

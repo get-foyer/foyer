@@ -1,0 +1,107 @@
+{
+  "name": "@getfoyer/lobby",
+  "version": "0.1.0",
+  "description": "A local focus and learning dashboard for AI agent sessions.",
+  "type": "module",
+  "main": "./dist/cli.js",
+  "bin": {
+    "foyer": "dist/cli.js",
+    "foyer-lobby": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,vite -c cyan,magenta \"tsx watch server/index.ts\" \"vite\"",
+    "build": "vite build && pnpm build:server",
+    "build:server": "tsc -p tsconfig.build.json && node scripts/build-server-assets.mjs",
+    "start": "NODE_ENV=production node dist/server/index.js",
+    "setup": "tsx scripts/setup.ts",
+    "uninstall": "tsx scripts/uninstall.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package:smoke": "node scripts/package-smoke.mjs",
+    "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm package:smoke",
+    "prepublishOnly": "pnpm run ci",
+    "prepare": "node scripts/husky-prepare.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.55.0",
+    "@inquirer/prompts": "^7.1.0",
+    "dompurify": "^3.2.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "mermaid": "^11.4.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "smol-toml": "^1.6.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^10.1.5",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "husky": "^9.1.7",
+    "jsdom": "^26.1.0",
+    "lint-staged": "^15.5.0",
+    "prettier": "^3.5.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.32.1",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.2"
+  },
+  "packageManager": "pnpm@11.5.2",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT",
+  "author": "Dennis Chia <dennis@getfoyer.dev>",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/get-foyer/lobby.git"
+  },
+  "bugs": {
+    "url": "https://github.com/get-foyer/lobby/issues"
+  },
+  "homepage": "https://github.com/get-foyer/lobby#readme",
+  "keywords": [
+    "ai-agent",
+    "claude-code",
+    "codex",
+    "developer-tools",
+    "dashboard",
+    "local-first"
+  ],
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,css,md}": [
+      "prettier --write"
+    ]
+  }
+}
