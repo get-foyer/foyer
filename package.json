@@ -1,12 +1,11 @@
 {
-  "name": "@getfoyer/lobby",
+  "name": "@getfoyer/foyer",
   "version": "0.1.0",
   "description": "A local focus and learning dashboard for AI agent sessions.",
   "type": "module",
   "main": "./dist/cli.js",
   "bin": {
-    "foyer": "dist/cli.js",
-    "foyer-lobby": "dist/cli.js"
+    "foyer": "dist/cli.js"
   },
   "files": [
     "dist",
@@ -81,12 +80,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/get-foyer/lobby.git"
+    "url": "git+https://github.com/getfoyer/foyer.git"
   },
   "bugs": {
-    "url": "https://github.com/get-foyer/lobby/issues"
+    "url": "https://github.com/getfoyer/foyer/issues"
   },
-  "homepage": "https://github.com/get-foyer/lobby#readme",
+  "homepage": "https://github.com/getfoyer/foyer#readme",
   "keywords": [
     "ai-agent",
     "claude-code",

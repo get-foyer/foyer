@@ -1,8 +1,8 @@
-# Foyer Lobby
+# Foyer
 
 > Turn the 3–5 minute "agent is working" wait into focused, in-context time.
 
-When you prompt Claude Code or Codex, Foyer Lobby hooks into the session and renders a live dashboard: a narrated "current focus", the files being touched in real time, and a deep-research panel for learning while you wait.
+When you prompt Claude Code or Codex, Foyer hooks into the session and renders a live dashboard: a narrated "current focus" and a deep-research panel for learning while you wait.
 
 **Core UX principle:** every panel gives you something to think about _in the same mental space as the current task_ — not just a progress bar.
 
@@ -14,7 +14,7 @@ When you prompt Claude Code or Codex, Foyer Lobby hooks into the session and ren
   </thead>
   <tbody>
     <tr>
-      <td><img src="https://raw.githubusercontent.com/get-foyer/lobby/main/docs/images/focus-tab.png" alt="Foyer Lobby — the Focus tab streams a narrated current focus as the agent works" /></td>
+      <td><img src="https://raw.githubusercontent.com/getfoyer/foyer/main/docs/images/focus-tab.png" alt="Foyer — the Focus tab streams a narrated current focus as the agent works" /></td>
     </tr>
   </tbody>
 </table>
@@ -28,8 +28,8 @@ When you prompt Claude Code or Codex, Foyer Lobby hooks into the session and ren
   </thead>
   <tbody>
     <tr>
-      <td><img src="https://raw.githubusercontent.com/get-foyer/lobby/main/docs/images/deep-research-panel.png" alt="Deep Research panel — briefings ready to read and topics to dig into while you wait" /></td>
-      <td><img src="https://raw.githubusercontent.com/get-foyer/lobby/main/docs/images/research-briefing.png" alt="A sourced research briefing rendered in the Research tab" /></td>
+      <td><img src="https://raw.githubusercontent.com/getfoyer/foyer/main/docs/images/deep-research-panel.png" alt="Deep Research panel — briefings ready to read and topics to dig into while you wait" /></td>
+      <td><img src="https://raw.githubusercontent.com/getfoyer/foyer/main/docs/images/research-briefing.png" alt="A sourced research briefing rendered in the Research tab" /></td>
     </tr>
     <tr>
       <td align="center"><em>Briefings ready to read + suggested topics to dig into</em></td>
@@ -42,7 +42,7 @@ When you prompt Claude Code or Codex, Foyer Lobby hooks into the session and ren
 
 ## Features
 
-- **Live touch points** — every file Write/Edit/MultiEdit streams as it happens
+- **Current focus** — a live, narrated summary of what the agent is doing right now, with a per-turn timeline
 - **Plan capture** — the approved plan auto-populates when you exit plan mode (rendered as formatted markdown)
 - **Deep research** — click suggested topics during the wait and get sourced briefings
 - **Connection status** — a Live / Reconnecting / Disconnected badge so you always know if the dashboard is connected
@@ -65,8 +65,8 @@ When you prompt Claude Code or Codex, Foyer Lobby hooks into the session and ren
 ## Quick start
 
 ```bash
-npx @getfoyer/lobby setup      # pick backend, install hooks
-npx @getfoyer/lobby start      # dashboard at http://localhost:4317
+npx @getfoyer/foyer setup      # pick backend, install hooks
+npx @getfoyer/foyer start      # dashboard at http://localhost:4317
 ```
 
 Then in another terminal window, start Claude Code or Codex in a hooked repo. The dashboard populates as the agent works.
@@ -74,7 +74,7 @@ Then in another terminal window, start Claude Code or Codex in a hooked repo. Th
 For repeated use, install the CLI globally:
 
 ```bash
-npm i -g @getfoyer/lobby
+npm i -g @getfoyer/foyer
 foyer setup
 foyer start
 ```
@@ -93,17 +93,17 @@ The setup wizard auto-detects what's available and asks which to use.
 
 **†** From 2026-06-15, Claude subscription headless usage (via `claude -p`) draws from a separate monthly "Agent SDK credit" pool, distinct from your interactive limits. The setup wizard warns you before choosing this option.
 
-**⚠ ToS note:** Using the Codex or Claude CLI to automate calls from a local server is in a gray area of each provider's terms of service. Foyer Lobby is intended for personal, local developer use only. For production or team use, use the Anthropic API (BYOK).
+**⚠ ToS note:** Using the Codex or Claude CLI to automate calls from a local server is in a gray area of each provider's terms of service. Foyer is intended for personal, local developer use only. For production or team use, use the Anthropic API (BYOK).
 
 ---
 
 ## Local security model
 
-Foyer Lobby is designed to run on your own machine, for your own agent sessions. The Express server binds to `127.0.0.1` only, and the installed hooks call `http://localhost:<port>/hook`.
+Foyer is designed to run on your own machine, for your own agent sessions. The Express server binds to `127.0.0.1` only, and the installed hooks call `http://localhost:<port>/hook`.
 
-The local API routes are not authenticated. That is intentional for a localhost developer tool, but it means any process running as your user can talk to the dashboard while it is open. Do not expose the Foyer Lobby port with a reverse proxy, tunnel, public bind address, or shared network listener. If you change the server to listen on anything other than loopback, add authentication and firewall rules first.
+The local API routes are not authenticated. That is intentional for a localhost developer tool, but it means any process running as your user can talk to the dashboard while it is open. Do not expose the Foyer port with a reverse proxy, tunnel, public bind address, or shared network listener. If you change the server to listen on anything other than loopback, add authentication and firewall rules first.
 
-Provider config is stored in `~/.config/foyer-lobby/config.env` by default and may contain credentials when you use the Anthropic API backend.
+Provider config is stored in `~/.config/foyer/config.env` by default and may contain credentials when you use the Anthropic API backend.
 
 ---
 
@@ -120,7 +120,7 @@ Provider config is stored in `~/.config/foyer-lobby/config.env` by default and m
 | `UserPromptSubmit`                           | New task started          |
 | `PreToolUse (ExitPlanMode)`                  | Approved plan captured    |
 | `PreToolUse / PostToolUse (AskUserQuestion)` | Needs-you state           |
-| `PostToolUse (Write\|Edit\|MultiEdit)`       | Live touch point          |
+| `PostToolUse`                                | Refresh current focus     |
 | `Notification`                               | Permission / idle prompts |
 | `Stop`                                       | Task complete             |
 
@@ -131,8 +131,8 @@ All hooks have a 2-second timeout — if the server is not running, the hook fai
 ## Development
 
 ```bash
-git clone https://github.com/get-foyer/lobby
-cd lobby
+git clone https://github.com/getfoyer/foyer
+cd foyer
 pnpm install
 pnpm setup      # optional: configure your local dev install
 pnpm build
@@ -161,14 +161,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for architecture details and conventions.
 ## Uninstall
 
 ```bash
-foyer uninstall  # strips only Foyer Lobby hooks; all other hooks are preserved
+foyer uninstall  # strips only Foyer hooks; all other hooks are preserved
 ```
 
 ---
 
 ## Configuration
 
-User config lives in `~/.config/foyer-lobby/config.env` by default (created by `foyer setup`). Set `FOYER_CONFIG_DIR` or `FOYER_CONFIG_PATH` to override that location. Environment variables still take precedence over file config.
+User config lives in `~/.config/foyer/config.env` by default (created by `foyer setup`). Set `FOYER_CONFIG_DIR` or `FOYER_CONFIG_PATH` to override that location. Environment variables still take precedence over file config.
 
 ```bash
 FOYER_PORT=4317                 # dashboard port
@@ -177,7 +177,7 @@ ANTHROPIC_API_KEY=sk-ant-...    # only for anthropic-api provider
 FOYER_ANTHROPIC_MODEL=claude-haiku-4-5
 ```
 
-Session data is stored in `~/.foyer-lobby` by default. Set `FOYER_DATA_DIR` to override it.
+Session data is stored in `~/.foyer` by default. Set `FOYER_DATA_DIR` to override it.
 
 ---
 
@@ -191,18 +191,6 @@ npm publish --dry-run --access public
 ```
 
 The package publishes the compiled `dist/` runtime, `README.md`, `LICENSE`, `SECURITY.md`, and `package.json`. Source checkout files, tests, local config, and generated development artifacts are excluded from the npm tarball.
-
----
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=get-foyer%2Flobby&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=get-foyer/lobby&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=get-foyer/lobby&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=get-foyer/lobby&type=date&legend=top-left" />
- </picture>
-</a>
 
 ---
 

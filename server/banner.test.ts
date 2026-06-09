@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { bannerMode, colorSupport, renderStaticBanner, showLobbyBanner } from './banner.js';
+import { bannerMode, colorSupport, renderStaticBanner, showFoyerBanner } from './banner.js';
 
 /** Build a fake WriteStream with just the fields the banner logic reads. */
 const stream = (over: Partial<{ isTTY: boolean; columns: number }> = {}): NodeJS.WriteStream =>
@@ -72,14 +72,14 @@ describe('colorSupport', () => {
 describe('renderStaticBanner', () => {
   it('contains the literal wordmark and subtitle', () => {
     const out = renderStaticBanner('Setup', 'truecolor');
-    expect(out).toContain('FOYER LOBBY');
+    expect(out).toContain('FOYER');
     expect(out).toContain('SETUP');
   });
 
   it('emits no ANSI escapes when color is none', () => {
     const out = renderStaticBanner('Setup', 'none');
     expect(hasAnsi(out)).toBe(false);
-    expect(out).toContain('FOYER LOBBY');
+    expect(out).toContain('FOYER');
     expect(out).toContain('SETUP');
   });
 
@@ -106,19 +106,19 @@ const recordingStream = (
   } as unknown as NodeJS.WriteStream & { writes: string[] };
 };
 
-describe('showLobbyBanner (stateful path)', () => {
+describe('showFoyerBanner (stateful path)', () => {
   it('animate path hides then restores the cursor and removes the SIGINT listener', async () => {
     vi.useFakeTimers();
     try {
       const before = process.listenerCount('SIGINT');
       const stream = recordingStream();
-      const p = showLobbyBanner({ subtitle: 'Setup', env: { COLORTERM: 'truecolor' }, stream });
+      const p = showFoyerBanner({ subtitle: 'Setup', env: { COLORTERM: 'truecolor' }, stream });
       await vi.runAllTimersAsync();
       await p;
       const out = stream.writes.join('');
       expect(out).toContain('\x1b[?25l'); // cursor hidden
       expect(out).toContain('\x1b[?25h'); // cursor restored
-      expect(out).toContain('FOYER LOBBY');
+      expect(out).toContain('FOYER');
       expect(process.listenerCount('SIGINT')).toBe(before); // no leaked handler
     } finally {
       vi.useRealTimers();
@@ -129,22 +129,22 @@ describe('showLobbyBanner (stateful path)', () => {
     const before = process.listenerCount('SIGINT');
     const stream = recordingStream({ throwOnWrite: true });
     await expect(
-      showLobbyBanner({ subtitle: 'Setup', env: { COLORTERM: 'truecolor' }, stream }),
+      showFoyerBanner({ subtitle: 'Setup', env: { COLORTERM: 'truecolor' }, stream }),
     ).resolves.toBeUndefined();
     expect(process.listenerCount('SIGINT')).toBe(before); // no leaked handler
   });
 
   it('static mode prints the banner without cursor control', async () => {
     const stream = recordingStream({ isTTY: false });
-    await showLobbyBanner({ subtitle: 'Setup', env: {}, stream });
+    await showFoyerBanner({ subtitle: 'Setup', env: {}, stream });
     const out = stream.writes.join('');
-    expect(out).toContain('FOYER LOBBY');
+    expect(out).toContain('FOYER');
     expect(out).not.toContain('\x1b[?25l'); // no cursor hide in static path
   });
 
   it('off mode writes nothing', async () => {
     const stream = recordingStream();
-    await showLobbyBanner({ subtitle: 'Setup', env: { FOYER_BANNER: 'off' }, stream });
+    await showFoyerBanner({ subtitle: 'Setup', env: { FOYER_BANNER: 'off' }, stream });
     expect(stream.writes.length).toBe(0);
   });
 });

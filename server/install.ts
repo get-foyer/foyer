@@ -1,5 +1,5 @@
 /**
- * Safely merge / unmerge Foyer Lobby hooks into a Claude Code settings.json
+ * Safely merge / unmerge Foyer hooks into a Claude Code settings.json
  * and a Codex config.toml.
  *
  * Rules:
@@ -9,7 +9,9 @@
  *   - Uninstall strips only our hooks (matched by URL), leaves everything else.
  */
 import { readFile, writeFile, copyFile, access } from 'fs/promises';
-import { dirname } from 'path';
+import { dirname, join, isAbsolute, relative } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
 import { mkdir } from 'fs/promises';
 import { parse as parseTOML, stringify as stringifyTOML } from 'smol-toml';
 
@@ -154,13 +156,71 @@ export function codexHookCommand(event: string, commandParts: string[] = ['foyer
 }
 
 /**
+ * Absolute path to THIS package's built CLI entry (dist/cli.js), for use as the
+ * Codex hook command. Codex runs hooks with plain `node`, which cannot load a
+ * `.ts` file — so a dev-mode entrypoint (`scripts/setup.ts` under tsx) baked into
+ * the config crashes every event with `ERR_UNKNOWN_FILE_EXTENSION` (exit 1). And
+ * a bare `foyer` may resolve to a different/stale global package that doesn't
+ * understand `hook codex`. So we resolve the package's own `bin.foyer` and emit
+ * an absolute path to it.
+ *
+ * Anchored on this module's URL (not `process.cwd()`) so it is correct from any
+ * cwd and across npm / pnpm / yarn / `npm link` layouts. Walks up to the nearest
+ * `package.json`:
+ *   prod  dist/server/install.js → dist/server → dist → <pkg> → dist/cli.js
+ *   dev   server/install.ts      → <repo>      → dist/cli.js (must be built)
+ *
+ * Throws loudly rather than returning an unrunnable or wrong-package command —
+ * a setup-time failure is recoverable; a silently broken hook is not.
+ */
+export function resolveCliEntrypoint(): string {
+  return resolveBinFrom(dirname(fileURLToPath(import.meta.url)));
+}
+
+/**
+ * Testable core of {@link resolveCliEntrypoint}: walk up from `startDir` to the
+ * nearest `package.json`, resolve its `bin.foyer`, and validate the result is a
+ * runnable, in-package `.js` file that exists on disk.
+ *
+ * @internal Exported for tests.
+ */
+export function resolveBinFrom(startDir: string): string {
+  let dir = startDir;
+  for (let i = 0; i < 8; i++) {
+    const pkgPath = join(dir, 'package.json');
+    if (existsSync(pkgPath)) {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as {
+        bin?: string | Record<string, string>;
+      };
+      const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.foyer;
+      if (!bin) throw new Error(`Cannot resolve Foyer CLI: no bin.foyer in ${pkgPath}`);
+      const abs = isAbsolute(bin) ? bin : join(dir, bin);
+      if (relative(dir, abs).startsWith('..')) {
+        throw new Error(`Foyer CLI bin escapes its package root: ${abs}`);
+      }
+      if (!abs.endsWith('.js')) {
+        throw new Error(`Foyer CLI bin is not a .js file (Codex runs hooks with node): ${abs}`);
+      }
+      if (!existsSync(abs)) {
+        throw new Error(`Foyer CLI not built at ${abs} — run \`npm run build\` first`);
+      }
+      return abs;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error('Cannot resolve Foyer CLI: no package.json found above the install module');
+}
+
+/**
  * Codex events to monitor. Minimal set that gives "needs input" signal plus
  * full session lifecycle so Codex sessions appear in the dashboard at all.
  */
 const CODEX_EVENTS = ['PermissionRequest', 'UserPromptSubmit', 'PostToolUse', 'Stop'] as const;
 
 /** Marker embedded in Codex entries so we can find and remove them. */
-const FOYER_MARKER = 'foyer-lobby-managed';
+const FOYER_MARKER = 'foyer-managed';
 
 export async function installCodexHooks(
   configPath: string,

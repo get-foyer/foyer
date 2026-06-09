@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { mkdtemp, rm, readFile, writeFile, mkdir } from 'fs/promises';
+import { join, dirname, isAbsolute } from 'path';
 import { tmpdir } from 'os';
 import {
   installHooks,
@@ -8,6 +8,7 @@ import {
   installCodexHooks,
   uninstallCodexHooks,
   codexHookCommand,
+  resolveBinFrom,
 } from './install.js';
 
 let tempDir: string;
@@ -152,7 +153,7 @@ beforeEach(async () => {
   codexConfigPath = join(tempDir, 'config.toml');
 });
 
-const COMMAND = ['/usr/local/bin/node', '/usr/local/lib/node_modules/@getfoyer/lobby/dist/cli.js'];
+const COMMAND = ['/usr/local/bin/node', '/usr/local/lib/node_modules/@getfoyer/foyer/dist/cli.js'];
 
 describe('installCodexHooks', () => {
   it('quotes the command and event in the installed command', () => {
@@ -179,7 +180,7 @@ describe('installCodexHooks', () => {
     expect(raw).toContain(COMMAND[1]);
     expect(raw).toContain("'hook'");
     expect(raw).toContain("'codex'");
-    expect(raw).toContain('foyer-lobby-managed');
+    expect(raw).toContain('foyer-managed');
   });
 
   it('is idempotent — running twice does not duplicate entries', async () => {
@@ -187,7 +188,7 @@ describe('installCodexHooks', () => {
     await installCodexHooks(codexConfigPath, COMMAND);
     const raw = await readFile(codexConfigPath, 'utf-8');
     // The marker should appear exactly once per event (4 events)
-    const markerOccurrences = (raw.match(/foyer-lobby-managed/g) ?? []).length;
+    const markerOccurrences = (raw.match(/foyer-managed/g) ?? []).length;
     expect(markerOccurrences).toBe(4); // one per event
   });
 
@@ -224,12 +225,77 @@ describe('uninstallCodexHooks', () => {
     const raw = await readFile(codexConfigPath, 'utf-8');
 
     // Our marker is gone
-    expect(raw).not.toContain('foyer-lobby-managed');
+    expect(raw).not.toContain('foyer-managed');
     // Foreign config preserved
     expect(raw).toContain('sk-test');
   });
 
   it('does not throw if the config file does not exist', async () => {
     await expect(uninstallCodexHooks(join(tempDir, 'nonexistent.toml'))).resolves.not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveBinFrom — entrypoint resolver
+//
+// Regression guard for the bug that shipped: the Codex hook command pointed at
+// `node scripts/setup.ts`, a .ts file node can't load, crashing every event.
+// The resolver must only ever yield a runnable, in-package .js path — and must
+// THROW (not silently fall back to a bare `foyer`) on anything else.
+// ---------------------------------------------------------------------------
+
+describe('resolveBinFrom', () => {
+  async function fixture(pkg: unknown, files: string[] = []): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'foyer-bin-'));
+    await writeFile(join(root, 'package.json'), JSON.stringify(pkg), 'utf-8');
+    for (const f of files) {
+      const p = join(root, f);
+      await mkdir(dirname(p), { recursive: true });
+      await writeFile(p, '// built\n', 'utf-8');
+    }
+    return root;
+  }
+
+  it('resolves bin.foyer to an absolute, existing .js path', async () => {
+    const root = await fixture({ bin: { foyer: 'dist/cli.js' } }, ['dist/cli.js']);
+    const start = join(root, 'dist', 'server'); // mimic dist/server/install.js
+    await mkdir(start, { recursive: true });
+    const resolved = resolveBinFrom(start);
+    expect(resolved).toBe(join(root, 'dist/cli.js'));
+    expect(isAbsolute(resolved)).toBe(true);
+    expect(resolved.endsWith('.js')).toBe(true);
+    expect(resolved.endsWith('.ts')).toBe(false);
+    expect(resolved).not.toMatch(/(^|\/)foyer$/); // never a bare `foyer`
+  });
+
+  it('accepts a string bin field', async () => {
+    const root = await fixture({ bin: 'dist/cli.js' }, ['dist/cli.js']);
+    expect(resolveBinFrom(root)).toBe(join(root, 'dist/cli.js'));
+  });
+
+  it('throws when bin.foyer is missing', async () => {
+    const root = await fixture({ name: '@getfoyer/foyer' });
+    expect(() => resolveBinFrom(root)).toThrow(/no bin\.foyer/);
+  });
+
+  it('throws when the bin points at a .ts file (node cannot run it)', async () => {
+    const root = await fixture({ bin: { foyer: 'scripts/setup.ts' } }, ['scripts/setup.ts']);
+    expect(() => resolveBinFrom(root)).toThrow(/not a \.js file/);
+  });
+
+  it('throws when the resolved .js is not built yet', async () => {
+    const root = await fixture({ bin: { foyer: 'dist/cli.js' } }); // no file created
+    expect(() => resolveBinFrom(root)).toThrow(/run `npm run build` first/);
+  });
+
+  it('throws when the bin escapes the package root', async () => {
+    const root = await fixture({ bin: { foyer: '../evil.js' } });
+    expect(() => resolveBinFrom(root)).toThrow(/escapes its package root/);
+  });
+
+  it('throws when no package.json is found above the start dir', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'foyer-nopkg-'));
+    // tmpdir() has no package.json up the tree within 8 hops on CI/macOS
+    expect(() => resolveBinFrom(root)).toThrow();
   });
 });

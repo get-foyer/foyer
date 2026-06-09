@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Foyer Lobby — uninstall hooks.
+ * Foyer — uninstall hooks.
  *
  * Reads the port from user config (or defaults to 4317) and strips only the hooks
  * that point to http://localhost:<port>/hook. All other hooks are preserved.
@@ -16,7 +16,7 @@ import { configPath } from '../server/paths.js';
 loadDotenv({ path: configPath() });
 
 export async function runUninstall() {
-  console.log('\nFoyer Lobby — Uninstall\n');
+  console.log('\nFoyer — Uninstall\n');
 
   const port = parseInt(process.env.FOYER_PORT ?? '4317', 10);
   const hookUrl = `http://localhost:${port}/hook`;

@@ -1,11 +1,5 @@
 // Shared types between the server (SSE payloads) and the React frontend.
 
-export interface TouchPoint {
-  path: string;
-  tool: string;
-  ts: number;
-}
-
 export interface ResearchLink {
   title: string;
   url: string;
@@ -98,7 +92,6 @@ export interface Session {
   focusHistory: FocusEntry[];
   activityStatus: 'idle' | 'generating' | 'ready' | 'error';
   activityError: string | null;
-  touchPoints: TouchPoint[];
   research: ResearchResult[];
   /**
    * Research topics auto-derived from the agent's work, refreshed each activity tick.
@@ -135,7 +128,6 @@ export function newSession(sessionId: string, prompt: string, startedAt: number)
     focusHistory: [],
     activityStatus: 'idle',
     activityError: null,
-    touchPoints: [],
     research: [],
     suggestedTopics: [],
     startedAt,
@@ -185,7 +177,6 @@ export type SseType =
    *  session). Emitted ONLY from onUserPrompt — never on agent-driven task broadcasts — so the
    *  client can "follow the live channel" without being yanked by autonomous agent activity. */
   | 'active'
-  | 'touch'
   | 'activity'
   | 'activity_generating'
   | 'activity_error'

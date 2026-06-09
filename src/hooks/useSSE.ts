@@ -45,7 +45,6 @@ export function useSSE(handlers: HandlerMap): ConnectionStatus {
       'snapshot',
       'task',
       'active',
-      'touch',
       'activity',
       'activity_generating',
       'activity_error',

@@ -1,4 +1,4 @@
-# CLAUDE.md — Foyer Lobby
+# CLAUDE.md — Foyer
 
 ## Design System
 

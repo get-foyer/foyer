@@ -114,9 +114,72 @@ const MAX_LEN = 4000;
 const AMBER_INIT =
   '%%{init: {"theme":"base","themeVariables":{"primaryColor":"#212830","primaryTextColor":"#f0f6fc","primaryBorderColor":"#d29922","nodeBorder":"#d29922","lineColor":"#d29922","secondaryColor":"#212830","tertiaryColor":"#2d333b","fontFamily":"ui-monospace, SFMono-Regular, monospace"},"flowchart":{"htmlLabels":false}}}%%\n';
 
-/** Guard an LLM-authored diagram: strip any model init directive, enforce size + type allowlist. */
-function guardDiagram(src: string): string | null {
-  const s = src.replace(/%%\{[\s\S]*?\}%%/g, '').trim();
+/**
+ * Mermaid keywords that must never appear as a BARE state id — unquoting `"end"` into
+ * `[*] --> end` is a parse error. A quoted label matching one of these is forced through the
+ * alias path instead. (`hide empty description` etc. are multi-word, so they never match the
+ * single-token bare-id test anyway; the single-token keywords are the ones that bite.)
+ */
+const STATE_RESERVED = new Set(['end', 'state', 'note', 'as', 'direction', 'hide', 'class']);
+const BARE_ID = /^[A-Za-z][A-Za-z0-9_]*$/;
+
+/**
+ * Rewrite quoted state names in a stateDiagram into valid mermaid.
+ *
+ * The model is told to quote node labels (correct for flowchart/sequence), but `stateDiagram-v2`
+ * rejects quoted state names: `[*] --> "Loading"` is a syntax error — quotes are only legal in the
+ * alias form `state "Loading" as Loading`. This normalizes both shapes:
+ *
+ *   "Loading"        (bare-id-safe, non-reserved)  → unquote inline:  Loading
+ *   "Awaiting input" (spaced / reserved / metachar)→ alias form:      state "Awaiting input" as Awaiting_input
+ *
+ * Only touches sources that start with `stateDiagram`; every other diagram type is returned
+ * unchanged (their quoted labels are valid). Replacement is literal (split/join), so labels
+ * containing regex metacharacters like `"Retry (3x)"` are handled safely.
+ */
+function normalizeStateDiagram(src: string): string {
+  if (!/^stateDiagram\b/.test(src)) return src;
+
+  const labels = new Set<string>();
+  for (const m of src.matchAll(/"([^"]+)"/g)) labels.add(m[1]);
+  if (labels.size === 0) return src;
+
+  const usedIds = new Set<string>();
+  const aliasLines: string[] = [];
+  let body = src;
+
+  for (const label of labels) {
+    if (BARE_ID.test(label) && !STATE_RESERVED.has(label)) {
+      // Inline unquote — clean output, no alias declaration needed.
+      usedIds.add(label);
+      body = body.split(`"${label}"`).join(label);
+      continue;
+    }
+    // Alias path: slugify to a safe id, de-collide, declare `state "<label>" as <id>`.
+    let base = label.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!base || /^[0-9]/.test(base) || STATE_RESERVED.has(base)) base = `S_${base || 'state'}`;
+    let id = base;
+    let n = 2;
+    while (usedIds.has(id)) id = `${base}_${n++}`;
+    usedIds.add(id);
+    aliasLines.push(`state "${label}" as ${id}`);
+    body = body.split(`"${label}"`).join(id);
+  }
+
+  if (aliasLines.length === 0) return body;
+  // Insert alias declarations right after the `stateDiagram[-v2]` header line.
+  const nl = body.indexOf('\n');
+  if (nl === -1) return `${body}\n${aliasLines.join('\n')}`;
+  return `${body.slice(0, nl + 1)}${aliasLines.join('\n')}\n${body.slice(nl + 1)}`;
+}
+
+/**
+ * Guard an LLM-authored diagram: strip any model init directive, normalize stateDiagram quoting,
+ * enforce size + type allowlist. Exported for unit testing (graphSanitize.test.ts pattern: test
+ * the transform, not mermaid.render).
+ */
+export function guardDiagram(src: string): string | null {
+  const s = normalizeStateDiagram(src.replace(/%%\{[\s\S]*?\}%%/g, '').trim());
   if (!s || s.length > MAX_LEN || !ALLOWED_TYPES.test(s)) return null;
   return s;
 }

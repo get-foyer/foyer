@@ -76,7 +76,6 @@ function makeSession() {
     prompt: 'Build the auth module',
     prompts: ['Build the auth module'],
     turnSeq: 1,
-    touchPoints: [],
     focusHistory: [],
     suggestedTopics: [],
   };

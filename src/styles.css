@@ -37,12 +37,6 @@
   --primary-hover: #2ea043;
   --fg-on-emphasis: #ffffff; /* text on green button */
 
-  /* Tool-tag hues */
-  --write: #3fb950;
-  --edit: #4493f8;
-  --bash: #d29922;
-  --read: #ab7df8;
-
   /* Shape */
   --radius: 6px;
   --radius-sm: 4px;
@@ -962,96 +956,6 @@ body {
 }
 
 /* -------------------------------------------------------------------------
-   Touch points
-   ------------------------------------------------------------------------- */
-.touch-panel {
-  flex: 0 0 auto;
-  max-height: 340px;
-}
-
-.tp-list {
-  list-style: none;
-  overflow-y: auto;
-  flex: 1;
-  padding: 6px 0;
-}
-
-.tp-item {
-  display: grid;
-  grid-template-columns: 64px 1fr auto;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  border-bottom: 1px solid transparent;
-  transition: background 0.15s;
-}
-
-.tp-item:hover {
-  background: var(--surface-2);
-}
-
-.tp-item--new {
-  animation: fadeSlideIn 0.25s ease-out;
-}
-
-@keyframes fadeSlideIn {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.tp-tool {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  text-align: center;
-}
-
-.tp-tool--write {
-  background: color-mix(in srgb, var(--write) 12%, transparent);
-  color: var(--write);
-}
-.tp-tool--edit {
-  background: color-mix(in srgb, var(--edit) 12%, transparent);
-  color: var(--edit);
-}
-.tp-tool--bash {
-  background: color-mix(in srgb, var(--bash) 12%, transparent);
-  color: var(--bash);
-}
-.tp-tool--read {
-  background: color-mix(in srgb, var(--read) 12%, transparent);
-  color: var(--read);
-}
-.tp-tool--other {
-  background: var(--surface-2);
-  color: var(--text-dim);
-}
-
-.tp-path {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tp-ts {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-/* -------------------------------------------------------------------------
    Research panel
    ------------------------------------------------------------------------- */
 .research-panel {
@@ -1062,8 +966,7 @@ body {
 }
 
 /* One scroll region for everything below the pinned title (subtitle + topic chips + ready-list),
-   so overflowing chips scroll instead of being clipped by the panel's overflow:hidden. Mirrors
-   .tp-list in the Live Files panel. */
+   so overflowing chips scroll instead of being clipped by the panel's overflow:hidden. */
 .research-panel__body {
   flex: 1;
   min-height: 0;
@@ -1999,9 +1902,6 @@ body {
   .spinner--sm {
     animation: none;
     border-top-color: var(--accent);
-  }
-  .tp-item--new {
-    animation: none;
   }
   .jump-to-live {
     animation: none;

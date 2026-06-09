@@ -37,6 +37,27 @@ if (!/^\d+\.\d+\.\d+/.test(version.trim())) {
   process.exit(1);
 }
 
+// Codex runs lifecycle hooks as `node <abs>/dist/cli.js hook codex EVENT`. This
+// is the exact invocation that shipped broken (it pointed at a .ts file node
+// can't load, crashing exit 1 on every event). Prove the built entrypoint is
+// actually node-runnable and honours its "never fail Codex" contract: it must
+// exit 0 even with no Foyer server listening. A shape assertion can't catch an
+// existing-but-unrunnable .js; executing it can.
+for (const event of ['UserPromptSubmit', 'PostToolUse', 'Stop']) {
+  try {
+    execFileSync(process.execPath, ['dist/cli.js', 'hook', 'codex', event], {
+      input: '{"session_id":"smoke","prompt":"hi"}',
+      encoding: 'utf-8',
+      timeout: 10_000,
+    });
+  } catch (err) {
+    console.error(`CLI hook command \`hook codex ${event}\` exited non-zero (status ${err.status}):`);
+    console.error(err.stderr || err.message);
+    process.exit(1);
+  }
+}
+console.log('CLI Codex hook commands exit 0 (node-runnable entrypoint).');
+
 const npmEnv = {
   ...process.env,
   npm_config_cache: mkdtempSync(join(tmpdir(), 'foyer-npm-cache-')),

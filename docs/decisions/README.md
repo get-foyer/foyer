@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-Non-trivial architecture decisions in Foyer Lobby are recorded here as ADRs
+Non-trivial architecture decisions in Foyer are recorded here as ADRs
 ([Michael Nygard format](https://github.com/joelparkerhenderson/architecture-decision-record):
 **Context / Decision / Consequences**).
 

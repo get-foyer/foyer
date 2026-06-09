@@ -1,18 +1,10 @@
 import React, { useEffect, useReducer, useState } from 'react';
-import type {
-  Session,
-  TouchPoint,
-  ResearchResult,
-  SuggestedTopic,
-  FocusEntry,
-  SnapshotPayload,
-} from './types';
+import type { Session, ResearchResult, SuggestedTopic, FocusEntry, SnapshotPayload } from './types';
 import { newSession, MAX_FOCUS, sortPinnedFirst } from './types';
 import { useSSE } from './hooks/useSSE';
 import type { ConnectionStatus } from './hooks/useSSE';
 import { TaskHeader } from './components/TaskHeader';
 import { SummaryPanel } from './components/SummaryPanel';
-import { TouchPoints } from './components/TouchPoints';
 import { ResearchPanel } from './components/ResearchPanel';
 import { ResearchTab } from './components/ResearchTab';
 import { ViewTabs } from './components/ViewTabs';
@@ -66,7 +58,6 @@ type Action =
       type: 'task';
       payload: { sessionId: string; prompt: string; prompts?: string[]; startedAt: number };
     }
-  | { type: 'touch'; payload: { sessionId: string } & TouchPoint }
   | {
       type: 'activity';
       payload: {
@@ -245,7 +236,7 @@ export function reducer(state: State, action: Action): State {
         }
         // Continue/reopen IN PLACE: adopt the server's prompt arc (source of truth — never
         // append locally, which would drift on reconnect/out-of-order), flip to working, and
-        // PRESERVE summary/touchPoints/research.
+        // PRESERVE summary/research.
         return updateSession(state, sessionId, (s) => ({
           ...s,
           status: 'working' as const,
@@ -257,7 +248,7 @@ export function reducer(state: State, action: Action): State {
       }
       // New OR re-opened (previously closed) session. Drop it from closedSessionIds so the
       // snapshot stops hiding it — the server cleared `closed` on this prompt (D5 re-open).
-      // Note (2nd-pass D1): a re-opened tab starts blank (empty touchPoints/research); the
+      // Note (2nd-pass D1): a re-opened tab starts blank (empty research); the
       // server-retained history reappears on the next reconnect snapshot.
       const closedSessionIds = state.closedSessionIds.filter((id) => id !== sessionId);
       const session = newSession(sessionId, prompt, startedAt);
@@ -323,17 +314,6 @@ export function reducer(state: State, action: Action): State {
         activeSessionId: live,
         unseenSessionIds: state.unseenSessionIds.filter((id) => id !== live),
       };
-    }
-
-    case 'touch': {
-      const { sessionId, path, tool, ts } = action.payload;
-      return updateSession(state, sessionId, (s) => ({
-        ...s,
-        // Any tool activity clears the waiting state
-        status: s.status === 'waiting' ? 'working' : s.status,
-        waitingReason: s.status === 'waiting' ? null : s.waitingReason,
-        touchPoints: [{ path, tool, ts }, ...s.touchPoints],
-      }));
     }
 
     case 'activity': {
@@ -630,7 +610,6 @@ export default function App() {
     snapshot: (data) => dispatch({ type: 'snapshot', payload: data as SnapshotPayload }),
     task: (data) => dispatch({ type: 'task', payload: data as P<'task'> }),
     active: (data) => dispatch({ type: 'active', payload: data as P<'active'> }),
-    touch: (data) => dispatch({ type: 'touch', payload: data as P<'touch'> }),
     activity: (data) => dispatch({ type: 'activity', payload: data as P<'activity'> }),
     activity_generating: (data) =>
       dispatch({ type: 'activity_generating', payload: data as P<'activity_generating'> }),
@@ -825,9 +804,6 @@ export default function App() {
               </div>
 
               <div className="app__right">
-                <ErrorBoundary>
-                  <TouchPoints touchPoints={activeSession?.touchPoints ?? []} />
-                </ErrorBoundary>
                 <ErrorBoundary>
                   <ResearchPanel
                     results={activeSession?.research ?? []}

@@ -24,7 +24,6 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     activityStatus: 'idle',
     activityError: null,
     waitingReason: null,
-    touchPoints: [],
     research: [],
     suggestedTopics: [],
     startedAt: 1000,
@@ -176,7 +175,6 @@ describe('reducer — task', () => {
       prompt: 'do something',
       startedAt: 9999,
       summary: null,
-      touchPoints: [],
       research: [],
     });
   });
@@ -225,7 +223,7 @@ describe('reducer — task', () => {
 // ---------------------------------------------------------------------------
 
 describe('reducer — task continuation', () => {
-  it('reopens a done session in place: adopts server prompts, working, finishedAt cleared, PRESERVES summary/touchPoints', () => {
+  it('reopens a done session in place: adopts server prompts, working, finishedAt cleared, PRESERVES summary', () => {
     const a = makeSession({
       sessionId: 'a',
       status: 'done',
@@ -233,7 +231,6 @@ describe('reducer — task continuation', () => {
       prompt: 'build login',
       prompts: ['build login'],
       summary: 'Built the login form',
-      touchPoints: [{ path: '/src/login.ts', tool: 'Write', ts: 1 }],
     });
     const state = { ...initialState, sessions: [a], activeSessionId: 'a' };
     const next = reducer(state, {
@@ -252,7 +249,6 @@ describe('reducer — task continuation', () => {
     expect(s.prompts).toEqual(['build login', 'now add tests']);
     // Accumulated state preserved across the turn
     expect(s.summary).toBe('Built the login form');
-    expect(s.touchPoints).toHaveLength(1);
   });
 
   it('continues a working session with a NEW prompt in place (not a no-op)', () => {
@@ -311,21 +307,6 @@ describe('reducer — task continuation', () => {
 // ---------------------------------------------------------------------------
 
 describe('reducer — background session updates', () => {
-  it('touch updates a non-active session', () => {
-    const a = makeSession({ sessionId: 'a' });
-    const b = makeSession({ sessionId: 'b' });
-    const state = { ...initialState, sessions: [a, b], activeSessionId: 'a' };
-    const next = reducer(state, {
-      type: 'touch',
-      payload: { sessionId: 'b', path: '/src/foo.ts', tool: 'Write', ts: 3000 },
-    });
-    const bNext = next.sessions.find((s) => s.sessionId === 'b')!;
-    expect(bNext.touchPoints).toHaveLength(1);
-    expect(bNext.touchPoints[0]).toEqual({ path: '/src/foo.ts', tool: 'Write', ts: 3000 });
-    // Session 'a' untouched
-    expect(next.sessions.find((s) => s.sessionId === 'a')!.touchPoints).toHaveLength(0);
-  });
-
   it('activity updates a non-active session', () => {
     const a = makeSession({ sessionId: 'a' });
     const b = makeSession({ sessionId: 'b' });
@@ -348,7 +329,6 @@ describe('reducer — background session updates', () => {
     const a = makeSession({ sessionId: 'a' });
     const state = { ...initialState, sessions: [a], activeSessionId: 'a' };
     const actions = [
-      { type: 'touch' as const, payload: { sessionId: 'x', path: '/x', tool: 'Write', ts: 0 } },
       {
         type: 'activity' as const,
         payload: { sessionId: 'x', summary: 'S', topics: [] },
@@ -522,21 +502,6 @@ describe('reducer — waiting', () => {
     });
     expect(next.sessions[0].status).toBe('waiting');
     expect(next.sessions[0].waitingReason).toBe('Permission requested: run bash');
-  });
-
-  it('a subsequent touch clears waiting → working and nulls the reason', () => {
-    const a = makeSession({
-      sessionId: 'a',
-      status: 'waiting',
-      waitingReason: 'permission needed',
-    });
-    const state = { ...initialState, sessions: [a], activeSessionId: 'a' };
-    const next = reducer(state, {
-      type: 'touch',
-      payload: { sessionId: 'a', path: '/src/foo.ts', tool: 'Write', ts: 2000 },
-    });
-    expect(next.sessions[0].status).toBe('working');
-    expect(next.sessions[0].waitingReason).toBeNull();
   });
 
   it('a subsequent task clears waiting → working', () => {
@@ -1083,7 +1048,7 @@ describe('reducer — task re-opens a closed session (D5)', () => {
     });
     const reopened = next.sessions.find((s) => s.sessionId === 'a')!;
     expect(reopened).toBeTruthy();
-    expect(reopened.touchPoints).toEqual([]); // history empty until reconnect snapshot
+    expect(reopened.research).toEqual([]); // history empty until reconnect snapshot
   });
 });
 

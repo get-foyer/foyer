@@ -205,11 +205,6 @@ export async function parseCodexResearchOutput(
 }
 
 export function buildActivityPrompt(ctx: ActivityContext): string {
-  const touchList = ctx.recentTouchPoints
-    .slice(0, 10)
-    .map((tp) => `  ${tp.tool}: ${tp.path}`)
-    .join('\n');
-
   // Focus anchor (D4): pin the session GOAL (first prompt) + CURRENT focus (latest prompt),
   // with the middle turns compacted to one line each. Keeps the goal anchored even after it
   // has scrolled out of the transcript tail, without dumping every verbatim turn into context.
@@ -245,23 +240,21 @@ export function buildActivityPrompt(ctx: ActivityContext): string {
   return `You are narrating, for a live dashboard, what a coding agent is doing in a session.
 The dashboard shows many sessions side by side, so the summary must read at a glance: an engineer should glance once and instantly know what the session is about and where it is.
 
-Given the agent's original task, recent file operations, and a tail of the agent's transcript, return JSON with two fields:
+Given the agent's original task and a tail of the agent's transcript, return JSON with two fields:
 
 - "summary": 2-4 sentences of markdown — what the agent is working on at this moment and what it just did. Present tense. No preamble.
 
 - "topics": an array of 3-6 research topics worth reading up on while the user waits, derived from THIS session's work — follow every rule:
   1. Each item is { "topic": "...", "reason": "..." }. "topic" is concise and searchable (≤120 chars, e.g. "React useTransition hook"). "reason" is one short line grounding it in the work (≤160 chars, e.g. "you're editing App.tsx which uses useTransition").
-  2. Draw from what's actually in play: libraries/APIs being used, concepts the work depends on, error messages seen, unfamiliar terms or commands. Prefer specific over generic ("Zod schema refinement", not "validation").
-  3. EXTRACTION ONLY — do NOT search the web; infer topics from the task, files, and transcript provided.
-  4. Skip the trivial/obvious (no "what is JavaScript"). If nothing is worth suggesting, return an empty array.
-  5. STABILITY: keep the previously-suggested topics below unless the focus has clearly shifted — reuse the same wording so chips don't churn.
+  2. Draw from what's actually in play, and make each topic answerable from PUBLIC/WEB knowledge: a named library, API, language feature, algorithm, protocol, error message, or industry concept. Prefer specific over generic ("Zod schema refinement", not "validation").
+  3. WEB-RESEARCHABLE ONLY — every chip is answered later by a live WEB SEARCH with no access to this project's code. NEVER suggest a topic about this repo's own internal design, file/module structure, naming, or proprietary architecture (e.g. "Foyer's provider abstraction", "this session's persistence layout"). If the only interesting subject is project-internal, reframe it as the underlying public concept (e.g. "write-through cache patterns") or omit it.
+  4. EXTRACTION ONLY — do NOT search the web while suggesting; infer topics from the task, files, and transcript provided.
+  5. Skip the trivial/obvious (no "what is JavaScript"). If nothing is worth suggesting, return an empty array.
+  6. STABILITY: keep the previously-suggested topics below unless the focus has clearly shifted — reuse the same wording so chips don't churn.
 
 ${taskSection}
 
 Current session status: ${statusLine}
-
-Recent file operations (newest first):
-${touchList || '  (none yet)'}
 
 Recent transcript tail:
 ${ctx.transcriptTail.slice(0, 3000) || '(no transcript available yet)'}

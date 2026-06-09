@@ -1,14 +1,14 @@
 /**
- * Foyer Lobby — terminal lobby banner.
+ * Foyer — terminal banner.
  *
  * A one-shot ASCII animation for the setup wizard: amber panels part from the
- * centre to reveal the FOYER LOBBY wordmark, then the animation settles into a
+ * centre to reveal the FOYER wordmark, then the animation settles into a
  * static banner. Honors the "Instrument" aesthetic in DESIGN.md (warm-black,
  * one signal-amber accent #ffb020, crisp box-drawing, mechanical motion).
  *
  * Degrades safely: non-TTY / CI / NO_COLOR / narrow terminals / FOYER_BANNER
  * opt-out all fall back to a single plain static line (or nothing). The wordmark
- * is rendered as the literal text "FOYER LOBBY" so logs and screen-readers keep
+ * is rendered as the literal text "FOYER" so logs and screen-readers keep
  * meaning even when color is stripped.
  */
 
@@ -17,7 +17,7 @@ export type ColorLevel = 'truecolor' | 'ansi256' | 'none';
 
 // Geometry of the banner. INNER is the interior width between the │ │ borders.
 const INNER = 30;
-const WORDMARK = 'FOYER LOBBY';
+const WORDMARK = 'FOYER';
 const INDENT = '  ';
 const DOOR = '▓';
 const STEPS = 6;
@@ -138,7 +138,7 @@ function buildRow(interior: string, reveal: number, pal: Palette): string {
 }
 
 /** The five banner lines (top, three content rows, bottom) at a reveal fraction. */
-function buildLobby(reveal: number, pal: Palette): string[] {
+function buildFoyerBanner(reveal: number, pal: Palette): string[] {
   const filler = ' '.repeat(INNER);
   const word = center(WORDMARK, INNER);
   const frame = (left: string, right: string) =>
@@ -157,24 +157,24 @@ function buildLobby(reveal: number, pal: Palette): string[] {
 
 /**
  * The settled banner as a plain string (no cursor control). Always contains the
- * literal text "FOYER LOBBY" and the uppercased subtitle so it stays meaningful
+ * literal text "FOYER" and the uppercased subtitle so it stays meaningful
  * when color is stripped.
  */
 export function renderStaticBanner(subtitle: string, level: ColorLevel = colorSupport()): string {
   const pal = palette(level);
-  const lines = buildLobby(1, pal);
+  const lines = buildFoyerBanner(1, pal);
   const label = `— ${subtitle.toUpperCase()} —`;
   const subtitleLine = INDENT + pal.dim + center(label, INNER + 2) + pal.reset;
   return [...lines, subtitleLine].join('\n');
 }
 
 /**
- * Entry point. Plays the lobby animation when the terminal supports it, otherwise
+ * Entry point. Plays the banner animation when the terminal supports it, otherwise
  * prints a static banner (or nothing). The banner is best-effort: every write is
  * guarded so a dead stream (EPIPE, closed FD) can never throw out of here and
  * abort the setup wizard, and the cursor-restore in `finally` always runs.
  */
-export async function showLobbyBanner(
+export async function showFoyerBanner(
   options: { subtitle?: string; env?: NodeJS.ProcessEnv; stream?: NodeJS.WriteStream } = {},
 ): Promise<void> {
   const { subtitle = 'Setup', env = process.env, stream = process.stdout } = options;
@@ -210,7 +210,7 @@ export async function showLobbyBanner(
   process.once('SIGINT', onSigint);
   try {
     for (let k = 0; k <= STEPS; k++) {
-      const lines = buildLobby(k / STEPS, pal);
+      const lines = buildFoyerBanner(k / STEPS, pal);
       if (k > 0 && !write(`\x1b[${lines.length}A`)) break;
       let drew = true;
       for (const line of lines) {

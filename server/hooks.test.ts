@@ -105,7 +105,6 @@ describe('handleHook self-trigger guard', () => {
     );
 
     expect(getAllSessions()).toHaveLength(0);
-    expect(broadcast).not.toHaveBeenCalledWith('touch', expect.anything());
   });
 
   it('drops a Codex-envelope event when the payload cwd contains the prefix', async () => {
@@ -225,7 +224,7 @@ describe('handleHook passthrough for genuine events', () => {
     expect(sessions[0].prompts).toEqual(['Duplicate prompt']);
   });
 
-  it('a follow-up prompt continues the session: accumulates the arc and keeps touchpoints', async () => {
+  it('a follow-up prompt continues the session: accumulates the arc', async () => {
     const sessionId = 'multi-turn';
     await handleHook(
       fakeReq({
@@ -236,7 +235,7 @@ describe('handleHook passthrough for genuine events', () => {
       }),
       fakeRes(),
     );
-    // A file edit in turn 1 records a touchpoint
+    // A tool hook in turn 1 keeps the session working
     await handleHook(
       fakeReq({
         hook_event_name: 'PostToolUse',
@@ -262,9 +261,6 @@ describe('handleHook passthrough for genuine events', () => {
     expect(sessions).toHaveLength(1);
     expect(sessions[0].prompts).toEqual(['Build the feature', 'Now add tests']);
     expect(sessions[0].prompt).toBe('Now add tests');
-    // Touchpoint from turn 1 survives the follow-up prompt
-    expect(sessions[0].touchPoints).toHaveLength(1);
-    expect(sessions[0].touchPoints[0].path).toBe('/src/feature.ts');
   });
 
   it('tool activity after a stale done state revives the session row', async () => {
@@ -303,14 +299,9 @@ describe('handleHook passthrough for genuine events', () => {
     const s = getSession(sessionId)!;
     expect(s.status).toBe('working');
     expect(s.finishedAt).toBeNull();
-    expect(s.touchPoints[0].path).toBe('/src/live.ts');
     expect(broadcast).toHaveBeenCalledWith(
       'task',
       expect.objectContaining({ sessionId, prompt: 'Keep working' }),
-    );
-    expect(broadcast).toHaveBeenCalledWith(
-      'touch',
-      expect.objectContaining({ sessionId, path: '/src/live.ts' }),
     );
   });
 
@@ -550,8 +541,6 @@ describe('handleHook resumed-session title recovery', () => {
     expect(s).not.toBeNull();
     expect(s!.prompt).toBe('Refactor the billing service');
     expect(s!.prompt).not.toBe('(resumed session)');
-    // The touchpoint is still recorded after the resume.
-    expect(s!.touchPoints[0].path).toBe('/src/billing.ts');
   });
 
   it('falls back to the cwd folder name when the transcript has no usable prompt', async () => {

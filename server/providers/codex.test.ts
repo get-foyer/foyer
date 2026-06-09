@@ -104,7 +104,6 @@ describe('buildActivityPrompt', () => {
   const baseCtx = {
     prompt: '',
     prompts: [] as string[],
-    recentTouchPoints: [] as { path: string; tool: string; ts: number }[],
     transcriptTail: '',
     previousTopics: [] as { topic: string; reason: string }[],
     status: 'working' as 'working' | 'waiting' | 'done',
@@ -114,19 +113,6 @@ describe('buildActivityPrompt', () => {
   it('includes the user prompt in the output', () => {
     const result = buildActivityPrompt({ ...baseCtx, prompt: 'Refactor the auth module' });
     expect(result).toContain('Refactor the auth module');
-  });
-
-  it('includes touch point file paths in the output', () => {
-    const result = buildActivityPrompt({
-      ...baseCtx,
-      prompt: 'Build tests',
-      recentTouchPoints: [
-        { path: '/src/auth.ts', tool: 'Write', ts: 1000 },
-        { path: '/src/auth.test.ts', tool: 'Write', ts: 2000 },
-      ],
-    });
-    expect(result).toContain('/src/auth.ts');
-    expect(result).toContain('/src/auth.test.ts');
   });
 
   it('includes transcript tail when non-empty', () => {
@@ -188,6 +174,12 @@ describe('buildActivityPrompt', () => {
     expect(result).toMatch(/topics/i);
     expect(result).toMatch(/reason/i);
     expect(result).toMatch(/EXTRACTION ONLY/i);
+  });
+
+  it('constrains topics to web-researchable subjects, not this repo internals', () => {
+    const result = buildActivityPrompt({ ...baseCtx, prompt: 'Test' });
+    expect(result).toMatch(/web search/i);
+    expect(result).toMatch(/internal/i);
   });
 
   it('embeds previously-suggested topics so chips stay stable across ticks', () => {

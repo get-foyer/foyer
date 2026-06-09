@@ -385,16 +385,12 @@ async function run(sessionId: string): Promise<void> {
   //  - turnSeq/turnPrompt pin the summary to the turn it's about, even if a new prompt
   //    arrives during the (multi-second) LLM call.
   //  - allowAppend gates focus-history growth on real progress: the transcript grew (we
-  //    only reach here when it did, unless there's no transcript) OR a file was touched
-  //    since the last entry. This stops the no-transcript 30s poll from flooding history
-  //    with re-narrations of the same state.
+  //    only reach here when it did, unless there's no transcript). This stops the
+  //    no-transcript 30s poll from flooding history with re-narrations of the same state.
   const turnSeq = session.turnSeq;
   const turnPrompt = session.prompt;
   const transcriptGrew = currentSize !== null;
-  const lastEntryTs = session.focusHistory[0]?.ts ?? 0;
-  const newestTouchTs = session.touchPoints[0]?.ts ?? 0;
-  const allowAppend =
-    session.focusHistory.length === 0 || transcriptGrew || newestTouchTs > lastEntryTs;
+  const allowAppend = session.focusHistory.length === 0 || transcriptGrew;
 
   // --- Run the LLM call ---
 
@@ -407,7 +403,6 @@ async function run(sessionId: string): Promise<void> {
     const ctx: ActivityContext = {
       prompt: session.prompt,
       prompts: session.prompts,
-      recentTouchPoints: session.touchPoints.slice(0, 10),
       transcriptTail,
       // Feed prior topics back for anti-churn — stable chips.
       previousTopics: session.suggestedTopics,

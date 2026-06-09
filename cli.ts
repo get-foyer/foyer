@@ -8,7 +8,7 @@ import { config as loadDotenv } from 'dotenv';
 const command = process.argv[2] ?? 'help';
 
 function printHelp(): void {
-  console.log(`Foyer Lobby
+  console.log(`Foyer
 
 Usage:
   foyer setup             Configure providers and install hooks
@@ -32,34 +32,60 @@ async function printVersion(): Promise<void> {
   console.log(pkg.version ?? '0.0.0');
 }
 
-async function runCodexHook(): Promise<void> {
-  const event = process.argv[4] ?? 'Unknown';
-  loadDotenv({ path: configPath() });
-  const port = parseInt(process.env.FOYER_PORT ?? '4317', 10);
+/**
+ * Pure core: wrap a raw Codex hook payload in the `{ source:'codex' }` envelope
+ * and POST it to the Foyer /hook endpoint. THROWS on bad JSON or a failed/aborted
+ * fetch so callers (and tests) can observe real failures — the exit-0 guarantee
+ * lives in the `runCodexHook` shell, not here.
+ *
+ * @internal Exported for tests.
+ */
+export async function postHookEvent(event: string, raw: string, port: number): Promise<void> {
+  const trimmed = raw.trim();
+  const payload = trimmed ? JSON.parse(trimmed) : {};
+  const body = JSON.stringify({ source: 'codex', event, payload });
 
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-  }
-
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2000);
   try {
-    const raw = Buffer.concat(chunks).toString('utf-8').trim();
-    const payload = raw ? JSON.parse(raw) : {};
-    const body = JSON.stringify({ source: 'codex', event, payload });
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
-
     await fetch(`http://localhost:${port}/hook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
       signal: controller.signal,
     });
-
+  } finally {
     clearTimeout(timeout);
-  } catch {
-    // Hook commands must never block or fail the agent process.
+  }
+}
+
+/**
+ * Codex lifecycle hook shell. Reads the event payload from stdin and forwards it
+ * to the running dashboard. MUST always exit 0 — Codex treats any non-zero exit
+ * as "hook (failed)" and surfaces it on every prompt/tool call. So every step is
+ * wrapped: a failure logs ONE diagnostic line to stderr (so dropped events aren't
+ * fully invisible) and we still exit 0.
+ */
+async function runCodexHook(): Promise<void> {
+  const event = process.argv[4] ?? 'Unknown';
+  try {
+    loadDotenv({ path: configPath() });
+    const port = parseInt(process.env.FOYER_PORT ?? '4317', 10);
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    }
+    const raw = Buffer.concat(chunks).toString('utf-8');
+
+    await postHookEvent(event, raw, port);
+  } catch (err) {
+    // Never block or fail Codex — but leave a single breadcrumb for debugging.
+    console.error(
+      `[foyer hook codex ${event}] dropped: ${err instanceof Error ? err.message : err}`,
+    );
+  } finally {
+    process.exit(0);
   }
 }
 

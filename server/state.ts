@@ -1,10 +1,4 @@
-import type {
-  Session,
-  TouchPoint,
-  ResearchResult,
-  SuggestedTopic,
-  FocusEntry,
-} from '../src/types.js';
+import type { Session, ResearchResult, SuggestedTopic, FocusEntry } from '../src/types.js';
 import { newSession, MAX_FOCUS, sortPinnedFirst } from '../src/types.js';
 import { normalizeWhitespace } from './providers/text.js';
 import { createNoopStore, DONE_TTL_MS, MAX_SESSIONS, type SessionStore } from './store.js';
@@ -219,7 +213,7 @@ const MAX_PROMPTS = 100;
  *
  * Claude Code reuses one stable session_id across every turn of a session, so a follow-up
  * prompt must NOT wipe the card. On continue we reopen to `working` and preserve the
- * accumulated `touchPoints`/`summary`/`research`/`startedAt`, appending the new
+ * accumulated `summary`/`research`/`startedAt`, appending the new
  * prompt to the `prompts` arc (the goal stays at `prompts[0]`, the latest is `prompt`).
  *
  * Returns `continued: true` when an existing session was extended — the caller uses this
@@ -268,14 +262,6 @@ export function startSession(
   return { session, continued: false };
 }
 
-export function addTouchPoint(sessionId: string, tp: TouchPoint): boolean {
-  const s = sessions.get(sessionId);
-  if (!s) return false;
-  s.touchPoints.unshift(tp); // newest first
-  markDirty(sessionId);
-  return true;
-}
-
 // ---------------------------------------------------------------------------
 // Activity state — live summary produced by summarizeActivity()
 // ---------------------------------------------------------------------------
@@ -294,7 +280,7 @@ export function setActivityGenerating(sessionId: string): boolean {
  *
  * Append gate (two layers, both must pass):
  *   1. `allowAppend` — the caller (activity.ts) only sets this when real progress happened
- *      (transcript grew OR a new touchpoint since the last entry). Kills the no-transcript
+ *      (the transcript grew since the last entry). Kills the no-transcript
  *      30s-poll flood where the LLM re-narrates the same state.
  *   2. content change — normalizeWhitespace(new) differs from the last entry, so casing /
  *      spacing / line-wrap variants of the same narration don't add a row.

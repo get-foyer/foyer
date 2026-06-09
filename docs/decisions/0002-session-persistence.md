@@ -8,7 +8,7 @@ Status: Accepted
 All session state lived in an in-memory `Map` in `server/state.ts` and was lost on every
 restart. The motivating feature was focus history (ADR 0001's sibling): retained "Current
 Focus" snapshots are only useful if they survive a restart. But persistence is broader than
-one feature — touchpoints, research, prompts, and the focus timeline all live on the same
+one feature — research, prompts, and the focus timeline all live on the same
 `Session` aggregate, so the right move was a reusable persistence standard, not a one-off.
 
 Foyer ships as an npm package run locally by a single user. That shapes the backend choice:
@@ -22,7 +22,7 @@ The Map stays the synchronous read model; mutators mark a session dirty and a de
 flusher writes it through. This is the standard future persisted state follows.
 
 1. **Backend = one JSON file per session**, in a per-user data dir
-   (`~/.foyer-lobby/sessions/<sha256(id)>.json`, override `FOYER_DATA_DIR`) — never the npm
+   (`~/.foyer/sessions/<sha256(id)>.json`, override `FOYER_DATA_DIR`) — never the npm
    install dir. **Not SQLite:** `better-sqlite3` is a native module (node-gyp install
    failures kill adoption) and `node:sqlite` needs Node 22.5+ and prints an experimental
    warning. JSON is a perfect fit for this workload and installs everywhere with zero deps.
@@ -57,7 +57,7 @@ flusher writes it through. This is the standard future persisted state follows.
 
 ## Consequences
 
-- Focus history, sessions, touchpoints, and research survive restarts.
+- Focus history, sessions, and research survive restarts.
 - A session that was mid-run when the server died comes back as `interrupted` (terminal,
   muted styling), not a forever-spinning "working" card.
 - Closing a tab now sticks across reloads/restarts.

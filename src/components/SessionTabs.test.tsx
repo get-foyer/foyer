@@ -16,7 +16,6 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     activityStatus: 'idle',
     activityError: null,
     waitingReason: null,
-    touchPoints: [],
     research: [],
     suggestedTopics: [],
     startedAt: 1000,

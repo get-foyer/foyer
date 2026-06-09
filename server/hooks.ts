@@ -8,7 +8,6 @@ import type { Request, Response } from 'express';
 import { basename } from 'path';
 import {
   startSession,
-  addTouchPoint,
   setWaiting,
   clearWaiting,
   finishSession,
@@ -229,11 +228,17 @@ async function onUserPrompt(sessionId: string, p: HookPayload): Promise<void> {
 async function onPostToolUse(sessionId: string, p: HookPayload): Promise<void> {
   // Any tool completion proves the agent is active again. This also repairs a stale
   // terminal state if Stop / transcript auto-close reached us before later hook traffic.
-  // Only revive sessions that are merely waiting or prematurely done — never a tab the
-  // user dismissed (closed) nor a terminal `interrupted` session (crash-recovery, ADR
-  // 0002); a still-running agent's late hooks must not resurrect either of those.
   const s = getSession(sessionId);
-  if (s && !s.closed && (s.status === 'waiting' || s.status === 'done')) {
+  if (!s) {
+    // Unknown session (e.g. server restarted mid-task) — resume it with a real title
+    // recovered from the transcript instead of an opaque placeholder, so tool activity
+    // after a restart resurrects the tab.
+    const title = await recoverTitle(p);
+    startSession(sessionId, title);
+  } else if (!s.closed && (s.status === 'waiting' || s.status === 'done')) {
+    // Only revive sessions that are merely waiting or prematurely done — never a tab the
+    // user dismissed (closed) nor a terminal `interrupted` session (crash-recovery, ADR
+    // 0002); a still-running agent's late hooks must not resurrect either of those.
     markWorking(sessionId);
     const live = getSession(sessionId) ?? s;
     broadcast('task', {
@@ -244,35 +249,7 @@ async function onPostToolUse(sessionId: string, p: HookPayload): Promise<void> {
     });
   }
 
-  const toolName = p.tool_name ?? 'unknown';
-  const filePath =
-    typeof p.tool_input?.file_path === 'string'
-      ? p.tool_input.file_path
-      : typeof p.tool_input?.path === 'string'
-        ? p.tool_input.path
-        : null;
-
-  if (!filePath) {
-    // Update transcript path even for non-file tools, then schedule summarisation
-    recordTranscriptPath(sessionId, p.transcript_path);
-    scheduleSummarize(sessionId);
-    return;
-  }
-
-  const tp = { path: filePath, tool: toolName, ts: Date.now() };
-  const ok = addTouchPoint(sessionId, tp);
-
-  // If this is an unknown session (e.g. server restarted mid-task), resume it with a
-  // real title recovered from the transcript instead of an opaque placeholder.
-  if (!ok) {
-    const title = await recoverTitle(p);
-    startSession(sessionId, title);
-    addTouchPoint(sessionId, tp);
-  }
-
-  broadcast('touch', { sessionId, ...tp });
-
-  // Update the transcript path and schedule a debounced summarisation
+  // Update the transcript path and schedule a debounced summarisation.
   recordTranscriptPath(sessionId, p.transcript_path);
   scheduleSummarize(sessionId);
 }

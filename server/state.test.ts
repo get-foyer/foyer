@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   _resetStateForTest,
   startSession,
-  addTouchPoint,
   setWaiting,
   clearWaiting,
   setActivityGenerating,
@@ -193,7 +192,6 @@ describe('startSession — new vs continue', () => {
 
   it('continuing an existing id appends the arc, reopens to working, and PRESERVES accumulated state', () => {
     startSession('s1', 'goal');
-    addTouchPoint('s1', { path: '/a.ts', tool: 'Write', ts: 1 });
     setActivity('s1', act({ summary: 'did the goal' }));
     finishSession('s1');
     const startedAt = getAllSessions()[0].startedAt;
@@ -207,7 +205,6 @@ describe('startSession — new vs continue', () => {
     expect(session.finishedAt).toBeNull();
     // Accumulated state preserved across the turn
     expect(session.summary).toBe('did the goal');
-    expect(session.touchPoints).toHaveLength(1);
     expect(session.startedAt).toBe(startedAt);
   });
 
@@ -585,12 +582,12 @@ describe('persistence wiring', () => {
     expect(rec.saved.some((s) => s.sessionId === 's' && s.status === 'done')).toBe(true);
   });
 
-  it('a touch marks dirty; flushAll writes it through', () => {
+  it('a debounced activity update marks dirty; flushAll writes it through', () => {
     const rec = recordingStore();
     initPersistence(rec.store);
     startSession('s', 'task');
     rec.saved.length = 0; // ignore the startSession write
-    addTouchPoint('s', { path: '/a.ts', tool: 'Write', ts: 1 });
+    setActivity('s', act({ summary: 'working on it' }));
     expect(rec.saved).toHaveLength(0); // debounced — not written yet
     flushAll();
     expect(rec.saved.some((s) => s.sessionId === 's')).toBe(true);

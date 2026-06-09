@@ -1,5 +1,5 @@
 import type { ResearchLink, ResearchSection } from '../../src/types.js';
-import type { TouchPoint, SuggestedTopic, SessionStatus } from '../../src/types.js';
+import type { SuggestedTopic, SessionStatus } from '../../src/types.js';
 import type { ProviderKind } from '../config.js';
 
 export type { SuggestedTopic };
@@ -17,8 +17,6 @@ export interface ActivityContext {
   prompt: string;
   /** Full ordered prompt history for this session (goal first, current focus last). */
   prompts: string[];
-  /** Most recent file operations, newest first (up to ~10). */
-  recentTouchPoints: TouchPoint[];
   /** Compact text extracted from the end of the agent's transcript. */
   transcriptTail: string;
   /**

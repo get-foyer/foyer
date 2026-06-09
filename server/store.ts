@@ -135,7 +135,6 @@ export function normalizeSession(raw: unknown): Session | null {
     prompts: Array.isArray(s.prompts) && s.prompts.length > 0 ? s.prompts : base.prompts,
     turnSeq: typeof s.turnSeq === 'number' ? s.turnSeq : base.turnSeq,
     focusHistory: Array.isArray(s.focusHistory) ? s.focusHistory : base.focusHistory,
-    touchPoints: Array.isArray(s.touchPoints) ? s.touchPoints : base.touchPoints,
     research: Array.isArray(s.research)
       ? s.research.map(normalizeResearchItem).filter((r): r is ResearchResult => r !== null)
       : base.research,

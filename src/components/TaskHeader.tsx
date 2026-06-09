@@ -27,7 +27,7 @@ export function TaskHeader({ session, connectionStatus, provider }: Props) {
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
     // Intentionally depend on specific scalar values, not the session reference, to avoid
-    // re-creating the interval when unrelated fields update (e.g. touchPoints, research).
+    // re-creating the interval when unrelated fields update (e.g. research).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.status, session?.startedAt, session?.finishedAt]);
 

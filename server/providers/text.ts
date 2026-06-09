@@ -40,7 +40,7 @@ Return ONLY a JSON object — no markdown code fences, no prose before or after 
 Rules:
 - "lede": 1-2 sentences a reader gets the gist from in two seconds.
 - "sections": use as FEW sections as the topic genuinely needs. A simple topic may be a SINGLE section. Do NOT invent sections to look thorough — empty structure is worse than none. Each "heading" is short and descriptive ("How it works", "Tradeoffs"). Each "body" is GitHub-flavored markdown: prose, lists, and a markdown TABLE when comparing options or listing specs.
-- "diagram": include ONLY when a visual genuinely aids understanding (a flow, a sequence, a state machine, an architecture). Omit the field entirely when prose is clearer. When present it is RAW mermaid source — a "flowchart", "sequenceDiagram", or "stateDiagram" with at most ~8 nodes and every node label in double quotes. No code fences.
+- "diagram": include ONLY when a visual genuinely aids understanding (a flow, a sequence, a state machine, an architecture). Omit the field entirely when prose is clearer. When present it is RAW mermaid source — a "flowchart", "sequenceDiagram", or "stateDiagram" with at most ~8 nodes. No code fences. Quoting rule by type: in "flowchart"/"graph", wrap each node label in double quotes (e.g. A["Run tests"]); in "stateDiagram", use short bare CamelCase state names with NO quotes (e.g. [*] --> Loading), and only give a state a spaced display name via the alias form: state "Awaiting input" as Awaiting.
 - "sources": cite about 5 relevant sources, each with a title and a URL.`;
 }
 
@@ -116,7 +116,7 @@ export function stripFences(code: string): string {
  * Lower-cases, trims, and collapses all runs of whitespace to a single space so two
  * narrations that differ only in casing/spacing/line-wrapping compare equal. This is a
  * coarse guard against the activity summarizer re-emitting a near-identical "Current
- * Focus" line; meaningful-progress gating (transcript growth / new touchpoint) is layered
+ * Focus" line; meaningful-progress gating (transcript growth) is layered
  * on top of it in activity.ts.
  */
 export function normalizeWhitespace(s: string): string {

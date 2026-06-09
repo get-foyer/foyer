@@ -1,4 +1,4 @@
-# Contributing to Foyer Lobby
+# Contributing to Foyer
 
 ## Prerequisites
 
