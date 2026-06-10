@@ -9,12 +9,18 @@ import {
   setSessionDropListener,
   flushAll,
 } from './state.js';
-import { clearPrefetch, getPrimedTopics, getWarmingTopics } from './prefetch.js';
+import {
+  clearPrefetch,
+  getPrimedTopics,
+  getWarmingTopics,
+  schedulePrimaryWarm,
+} from './prefetch.js';
 import { createJsonStore } from './store.js';
 import {
   startStaleSessionWatcher,
   startLiveSummaryPoll,
   forgetActivitySession,
+  setPrimaryWarmScheduler,
 } from './activity.js';
 
 const app = createApp();
@@ -27,6 +33,11 @@ async function boot() {
   // (avoids an sse↔prefetch cycle — prefetch already imports broadcast from sse).
   setPrimedTopicsProvider(getPrimedTopics);
   setWarmingTopicsProvider(getWarmingTopics);
+
+  // Primary-briefing warming: activity.ts designates, prefetch.ts warms. Injected (not
+  // imported) because prefetch already imports activity (isSummarizing) — same no-cycle
+  // pattern as the SSE getters above.
+  setPrimaryWarmScheduler(schedulePrimaryWarm);
 
   // Free a session's prefetch cache when it ends (done/stale/turn-end), mirroring the /close
   // path. Injected so state.ts stays free of a prefetch import (one-way: prefetch → state).

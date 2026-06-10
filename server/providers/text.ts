@@ -2,6 +2,7 @@
  * Shared text-processing helpers for LLM provider output.
  */
 import type { SuggestedTopic, ResearchSection, ResearchLink } from '../../src/types.js';
+import { topicKey } from '../../src/types.js';
 import { sanitizeUrl } from '../../src/lib/url.js';
 
 /** Caps for a single suggested topic — protects the UI and the downstream research prompt. */
@@ -9,6 +10,8 @@ const TOPIC_MAX = 120;
 const REASON_MAX = 160;
 /** Hard cap on how many topics we surface as chips. */
 const MAX_TOPICS = 6;
+/** Cap for the primary briefing's why-now line — one line on the strip (design review DR12). */
+const PRIMARY_REASON_MAX = 80;
 
 /** Caps for a parsed research briefing (defensive — the shape comes straight from an LLM). */
 const LEDE_MAX = 400;
@@ -69,6 +72,35 @@ export function normalizeTopics(raw: unknown): SuggestedTopic[] {
     if (out.length >= MAX_TOPICS) break;
   }
   return out;
+}
+
+/**
+ * Validate the raw `primary` field from any provider's activity output against the topics the
+ * SAME response suggested. Shared by all three parse sites so the trust boundary lives in ONE
+ * place (eng review D10).
+ *
+ * Defensive by design — the field comes straight from an LLM:
+ *  - null / missing / non-object → null (a first-class outcome: no confident pick / keep current)
+ *  - `topic` that doesn't match any suggested topic (by topicKey) → null. An unknown key must
+ *    never reach the designation machinery — it would dangle against the chip/prefetch caches.
+ *  - the CANONICAL topic text from the matched suggestion is returned (never the raw LLM string),
+ *    so designation, chips, and the prefetch cache can never desync on identity.
+ *  - `reason` trimmed + capped at one strip line; falls back to the suggestion's own reason.
+ */
+export function normalizePrimary(
+  raw: unknown,
+  topics: SuggestedTopic[],
+): { topic: string; reason: string } | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  const topic = typeof rec.topic === 'string' ? rec.topic.trim() : '';
+  if (!topic) return null;
+  const key = topicKey(topic);
+  const match = topics.find((t) => topicKey(t.topic) === key);
+  if (!match) return null;
+  const rawReason = typeof rec.reason === 'string' ? rec.reason.trim() : '';
+  const reason = (rawReason || match.reason).slice(0, PRIMARY_REASON_MAX);
+  return { topic: match.topic, reason };
 }
 
 /**

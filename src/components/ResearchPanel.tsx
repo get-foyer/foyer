@@ -1,6 +1,8 @@
 import React from 'react';
-import type { ResearchResult, SuggestedTopic, Session } from '../types';
+import type { ResearchResult, SuggestedTopic, Session, PrimaryBriefing, DocRef } from '../types';
+import { topicKey } from '../types';
 import { ResearchChips } from './ResearchChips';
+import { PrimaryBriefingStrip } from './PrimaryBriefingStrip';
 
 interface Props {
   results: ResearchResult[];
@@ -19,7 +21,18 @@ interface Props {
   warmingTopics: string[];
   /** Open the full-width Research tab on the briefing with this timestamp. */
   onOpenResearch: (ts: number) => void;
+  /** The session's primary-briefing designation (the strip), or null when there's no pick. */
+  primary?: PrimaryBriefing | null;
+  /** Extractive readout inputs (shown when there's no primary): touched areas + matched docs. */
+  touchedAreas?: string[];
+  contextDocs?: DocRef[];
+  /** Commit a primary dismissal (after the strip's 5s undo window lapses). */
+  onDismissPrimary?: () => void;
+  /** Retry a failed primary warm. */
+  onRetryPrimary?: () => void;
 }
+
+const noop = () => {};
 
 /**
  * Deep Research LAUNCHER (right rail of the Focus view) — ONE unified list, no second section.
@@ -45,11 +58,23 @@ export function ResearchPanel({
   activityStatus,
   sessionId,
   onOpenResearch,
+  primary,
+  touchedAreas = [],
+  contextDocs = [],
+  onDismissPrimary = noop,
+  onRetryPrimary = noop,
 }: Props) {
+  // Composition rule (design review DR5): the primary strip owns the top; the unified list below
+  // EXCLUDES the primary's topic so the same briefing never renders twice (strip + row) and the
+  // primary's own chip never sits below its strip. Exclusion is by topicKey — one identity.
+  const primaryKey = primary ? topicKey(primary.topic) : null;
+  const isPrimary = (t: string) => primaryKey != null && topicKey(t) === primaryKey;
   // results arrive newest-first; the unread/read split preserves that order within each group.
-  const unread = results.filter((r) => r.readAt == null);
-  const read = results.filter((r) => r.readAt != null);
-  const isEmpty = suggestedTopics.length === 0 && results.length === 0;
+  const unread = results.filter((r) => r.readAt == null && !isPrimary(r.topic));
+  const read = results.filter((r) => r.readAt != null && !isPrimary(r.topic));
+  const listTopics = suggestedTopics.filter((t) => !isPrimary(t.topic));
+  const hasStrip = !!primary || touchedAreas.length > 0 || contextDocs.length > 0;
+  const isEmpty = !hasStrip && listTopics.length === 0 && unread.length === 0 && read.length === 0;
 
   const briefingRow = (r: ResearchResult, isRead: boolean) => (
     <li key={r.ts}>
@@ -75,29 +100,43 @@ export function ResearchPanel({
       <h2 className="panel__title">Deep Research</h2>
 
       <div className="research-panel__body">
-        <p className="panel__subtitle">
-          Briefings ready to read, and topics to dig into while you wait.
-        </p>
+        {/* PRIMARY: the one recommended read, as the module's integrated top band (DR4). Renders
+            its own states (extractive / warming / ready / read / error); null + no signals → nothing. */}
+        <PrimaryBriefingStrip
+          primary={primary}
+          results={results}
+          touchedAreas={touchedAreas}
+          contextDocs={contextDocs}
+          onOpenBriefing={onOpenResearch}
+          onDismiss={onDismissPrimary}
+          onRetry={onRetryPrimary}
+        />
 
         {isEmpty ? (
           <ResearchEmptyState activityStatus={activityStatus} />
         ) : (
-          <ul className="research-list" aria-label="Research">
-            {/* Most actionable first: a briefing that's already waiting for you. */}
-            {unread.map((r) => briefingRow(r, false))}
+          <>
+            {listTopics.length > 0 || unread.length > 0 || read.length > 0 ? (
+              <p className="primary-strip__followups-label">Follow-up topics</p>
+            ) : null}
+            <ul className="research-list" aria-label="Research follow-ups">
+              {/* Most actionable first: a briefing that's already waiting for you. */}
+              {unread.map((r) => briefingRow(r, false))}
 
-            {/* Suggested-topic launcher (shared with the empty Research tab). Renders chip <li>s
-                plus a trailing error <li> in place, so the one unified list is preserved. */}
-            <ResearchChips
-              suggestedTopics={suggestedTopics}
-              sessionId={sessionId}
-              primedTopics={primedTopics}
-              warmingTopics={warmingTopics}
-            />
+              {/* Suggested-topic launcher (shared with the empty Research tab). Renders chip <li>s
+                  plus a trailing error <li> in place, so the one unified list is preserved. The
+                  primary's own topic is excluded (DR5). */}
+              <ResearchChips
+                suggestedTopics={listTopics}
+                sessionId={sessionId}
+                primedTopics={primedTopics}
+                warmingTopics={warmingTopics}
+              />
 
-            {/* Already read — dimmed, sunk to the bottom, no amber. */}
-            {read.map((r) => briefingRow(r, true))}
-          </ul>
+              {/* Already read — dimmed, sunk to the bottom, no amber. */}
+              {read.map((r) => briefingRow(r, true))}
+            </ul>
+          </>
         )}
       </div>
     </section>

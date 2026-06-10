@@ -75,6 +75,56 @@ export interface SuggestedTopic {
  *  interrupted = was live when the server died, recovered from disk on the next boot (terminal). */
 export type SessionStatus = 'working' | 'waiting' | 'done' | 'interrupted';
 
+/** Canonical research-topic key: trimmed + lowercased. The single source of truth for topic
+ *  identity across the in-flight guard, the suggested-topic filter, the prefetch cache, the
+ *  primary-briefing designation, and the client's chip/strip composition — shared here (not in
+ *  state.ts) so the pure ranking module and the client can use it without importing server state. */
+export const topicKey = (topic: string): string => topic.trim().toLowerCase();
+
+/** A doc the primary briefing is grounded in (citation readout on the strip) or that matched the
+ *  session's context (the extractive WATCHING/MATCHED state). Path is display-relative; never an
+ *  interactive control in v1 (design review DR14). */
+export interface DocRef {
+  path: string;
+  title: string;
+}
+
+/**
+ * Lifecycle of a session's PRIMARY briefing — the one recommended read (Live Learning Briefing).
+ *
+ *             (no candidates / null pick)
+ *    ┌──────────── (none) ◀──────────────────────┐
+ *    │              │ ranking proposes pick       │ session close
+ *    │              ▼                             │
+ *    │           warming ──fails ×2──▶ error ──retry──▶ warming
+ *    │              │ research resolves
+ *    │              ▼
+ *    │            ready ──user opens──▶ read ──next pick──▶ demoted to read row (DR7)
+ *    │              │ meaningful shift (unread only)
+ *    │              ▼
+ *    └────────── superseded (old briefing stays as an unread row / chip)
+ *        (user dismiss: any non-read state → logged + excluded; next-ranked promoted)
+ */
+export type PrimaryStatus = 'warming' | 'ready' | 'read' | 'error';
+
+export interface PrimaryBriefing {
+  /** Original topic text — identity is topicKey(topic); the briefing body lives in `research[]`
+   *  under the same topic (designation-over-data, eng review D8: one source of truth). */
+  topic: string;
+  /** The LLM's one-line "why read this now" (≤80 chars, server-capped — design review DR12). */
+  reason: string;
+  status: PrimaryStatus;
+  /** ms timestamp when the current status was entered. */
+  since: number;
+  /** Time-to-ready in ms (queued→ready), frozen at ready time. The D17 starvation metric,
+   *  surfaced as the strip's "ready · mm:ss" readout (DR11). Null until ready. */
+  readyMs?: number | null;
+  /** Consecutive warm failures (the "failed ×N" readout; 2 → error state). */
+  failures?: number;
+  /** Docs the briefing prompt was grounded in (strip citation readout, ≤3). */
+  docs?: DocRef[];
+}
+
 export interface Session {
   sessionId: string;
   status: SessionStatus;
@@ -107,6 +157,22 @@ export interface Session {
    *  sort to the top of the sidebar, most-recently-pinned first (sortPinnedFirst). Server-owned
    *  and persisted, mirroring `closed` (ADR 0004). */
   pinnedAt?: number | null;
+  /** Working directory of the agent (from hook payloads). Grounds the repo doc-source scan and
+   *  the touched-area dir aggregation. Null until a hook carries one. */
+  cwd?: string | null;
+  /** Directory areas the agent's tool calls have touched (dir-aggregated, most-active first,
+   *  capped). Accumulated in memory per tool call, persisted only on the summarize tick (eng
+   *  review D14 — no per-tool-call write amplification). Feeds ranking + the extractive strip. */
+  touchedAreas?: string[];
+  /** Top indexed docs matching the session's context (the extractive MATCHED readout, capped). */
+  contextDocs?: DocRef[];
+  /** The session's primary briefing designation, or null/absent when no confident pick exists
+   *  (null-primary is a first-class outcome — eng review D7). Rides the snapshot, so reconnect
+   *  replay needs no extra machinery. */
+  primary?: PrimaryBriefing | null;
+  /** topicKeys the user dismissed via "NOT USEFUL" — excluded from suggestions and from primary
+   *  selection for the rest of the session (eng review D18). */
+  dismissedTopics?: string[];
 }
 
 /** Payload for the `snapshot` SSE event. Carries all known sessions + the server-designated active session. */
@@ -189,4 +255,8 @@ export type SseType =
   /** A speculative prefetch is actively in flight (`active: true`) or just left flight
    *  (`active: false`). Drives the pulsing "warming" ring that settles into the primed dot. */
   | 'research_warming'
+  /** The session's primary-briefing designation changed (designated / ready / read / error /
+   *  dismissed / demoted). Payload: { sessionId, primary: PrimaryBriefing | null }. Reconnect
+   *  replay is free: `primary` lives on Session and rides the snapshot. */
+  | 'primary'
   | 'heartbeat';

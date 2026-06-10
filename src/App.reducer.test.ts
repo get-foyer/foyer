@@ -167,4 +167,106 @@ describe('reducer — mark_research_read (readAt optimistic mirror)', () => {
       reducer(start, { type: 'mark_research_read', payload: { sessionId: 's1', ts: 999 } }),
     ).toBe(start);
   });
+
+  it('opening the PRIMARY briefing flips its strip ready → read in lockstep (DR10)', () => {
+    const base = withSessions([mk('s1', 1)]);
+    const start = {
+      ...base,
+      sessions: [
+        {
+          ...base.sessions[0],
+          research: [briefing(10)], // topic "T10"
+          primary: {
+            topic: 'T10',
+            reason: 'why',
+            status: 'ready' as const,
+            since: 0,
+            readyMs: 5000,
+          },
+        },
+      ],
+    };
+    const next = reducer(start, {
+      type: 'mark_research_read',
+      payload: { sessionId: 's1', ts: 10 },
+    });
+    expect(next.sessions[0].research[0].readAt).toEqual(expect.any(Number));
+    expect(next.sessions[0].primary?.status).toBe('read');
+  });
+
+  it('opening a NON-primary briefing leaves the primary untouched', () => {
+    const base = withSessions([mk('s1', 1)]);
+    const start = {
+      ...base,
+      sessions: [
+        {
+          ...base.sessions[0],
+          research: [briefing(10), briefing(20)],
+          primary: { topic: 'T20', reason: 'why', status: 'ready' as const, since: 0, readyMs: 1 },
+        },
+      ],
+    };
+    const next = reducer(start, {
+      type: 'mark_research_read',
+      payload: { sessionId: 's1', ts: 10 },
+    });
+    expect(next.sessions[0].primary?.status).toBe('ready');
+  });
+});
+
+describe('reducer — primary designation event', () => {
+  it('patches the session primary; null clears it (falls back to extractive)', () => {
+    const base = withSessions([mk('s1', 1)]);
+    const designated = reducer(base, {
+      type: 'primary',
+      payload: {
+        sessionId: 's1',
+        primary: { topic: 'T', reason: 'r', status: 'warming', since: 0 },
+      },
+    });
+    expect(designated.sessions[0].primary?.topic).toBe('T');
+    const cleared = reducer(designated, {
+      type: 'primary',
+      payload: { sessionId: 's1', primary: null },
+    });
+    expect(cleared.sessions[0].primary).toBeNull();
+  });
+
+  it('is a no-op for an unknown session', () => {
+    const base = withSessions([mk('s1', 1)]);
+    const next = reducer(base, {
+      type: 'primary',
+      payload: {
+        sessionId: 'ghost',
+        primary: { topic: 'T', reason: 'r', status: 'ready', since: 0 },
+      },
+    });
+    expect(next).toBe(base);
+  });
+
+  it('survives a snapshot via the Session object (no separate reset needed)', () => {
+    const withPrimary = {
+      ...initialState,
+      sessions: [
+        {
+          ...mk('s1', 1),
+          primary: { topic: 'T', reason: 'r', status: 'ready' as const, since: 0 },
+        },
+      ],
+    };
+    // A snapshot replaces sessions wholesale; primary rides along on the incoming Session.
+    const next = reducer(withPrimary, {
+      type: 'snapshot',
+      payload: {
+        sessions: [
+          {
+            ...mk('s1', 1),
+            primary: { topic: 'T2', reason: 'r2', status: 'warming' as const, since: 9 },
+          },
+        ],
+        activeSessionId: 's1',
+      },
+    });
+    expect(next.sessions[0].primary?.topic).toBe('T2');
+  });
 });

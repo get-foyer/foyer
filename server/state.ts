@@ -1,5 +1,12 @@
-import type { Session, ResearchResult, SuggestedTopic, FocusEntry } from '../src/types.js';
-import { newSession, MAX_FOCUS, sortPinnedFirst } from '../src/types.js';
+import type {
+  Session,
+  ResearchResult,
+  SuggestedTopic,
+  FocusEntry,
+  DocRef,
+  PrimaryBriefing,
+} from '../src/types.js';
+import { newSession, MAX_FOCUS, sortPinnedFirst, topicKey } from '../src/types.js';
 import { normalizeWhitespace } from './providers/text.js';
 import { createNoopStore, DONE_TTL_MS, MAX_SESSIONS, type SessionStore } from './store.js';
 
@@ -92,10 +99,9 @@ export function flushAll(): void {
 // ---------------------------------------------------------------------------
 const inFlightResearch = new Map<string, Set<string>>();
 
-/** Canonical research-topic key: trimmed + lowercased. The single source of truth for topic
- *  identity across the in-flight guard, the suggested-topic filter, and the prefetch cache —
- *  exported so those callers can never desync on normalization. */
-export const topicKey = (topic: string): string => topic.trim().toLowerCase();
+// Canonical topic identity now lives in src/types.ts (shared with the pure ranking module and
+// the client). Re-exported here so existing server imports keep working.
+export { topicKey };
 
 export function addResearchInFlight(sessionId: string, topic: string): void {
   let set = inFlightResearch.get(sessionId);
@@ -297,10 +303,17 @@ export function setActivity(
     turnSeq: number;
     turnPrompt: string;
     allowAppend: boolean;
+    /** Touched-areas snapshot taken at this tick — this write IS the touched-areas flush
+     *  (eng review D14: persistence rides the tick, never per tool call). */
+    touchedAreas?: string[];
+    /** Top doc matches for the extractive strip readout (capped at the call site). */
+    contextDocs?: DocRef[];
   },
 ): FocusEntry | null {
   const s = sessions.get(sessionId);
   if (!s) return null;
+  if (update.touchedAreas) s.touchedAreas = update.touchedAreas;
+  if (update.contextDocs) s.contextDocs = update.contextDocs;
 
   const last = s.focusHistory[0];
   const isNew =
@@ -329,15 +342,17 @@ export function setActivity(
 }
 
 /**
- * Drop topics the user has already researched OR has a research call in flight for,
- * so a chip can't reappear between the click and the result landing (case-insensitive).
+ * Drop topics the user has already researched, has a research call in flight for, or has
+ * DISMISSED via the primary strip's "not useful" (eng review D18) — so a chip can't reappear
+ * between the click and the result landing, and a rejected topic stays gone (case-insensitive).
  */
 function filterSuggestedTopics(s: Session, topics: SuggestedTopic[]): SuggestedTopic[] {
   const researched = new Set(s.research.map((r) => topicKey(r.topic)));
+  const dismissed = new Set(s.dismissedTopics ?? []);
   const inFlight = inFlightResearch.get(s.sessionId);
   return topics.filter((t) => {
     const k = topicKey(t.topic);
-    return !researched.has(k) && !(inFlight?.has(k) ?? false);
+    return !researched.has(k) && !dismissed.has(k) && !(inFlight?.has(k) ?? false);
   });
 }
 
@@ -463,6 +478,11 @@ export function markResearchRead(sessionId: string, ts: number): boolean {
   if (!r) return false;
   if (r.readAt == null) {
     r.readAt = Date.now();
+    // One read-state app-wide (eng review D8 / design DR10): opening the PRIMARY's briefing in
+    // the Research tab is what flips the strip ready → read. Same write, same flush.
+    if (s.primary?.status === 'ready' && topicKey(s.primary.topic) === topicKey(r.topic)) {
+      s.primary = { ...s.primary, status: 'read', since: Date.now() };
+    }
     flushNow(sessionId);
   }
   return true;
@@ -477,6 +497,121 @@ export function addResearch(sessionId: string, result: ResearchResult): boolean 
   removeResearchInFlight(sessionId, result.topic);
   const k = topicKey(result.topic);
   s.suggestedTopics = s.suggestedTopics.filter((t) => topicKey(t.topic) !== k);
+  markDirty(sessionId);
+  return true;
+}
+
+/** Record the session's working directory from hook payloads (grounds the repo doc scan and
+ *  touched-area aggregation). First non-empty value wins; later hooks won't churn it. */
+export function recordSessionCwd(sessionId: string, cwd: string | undefined): void {
+  if (!cwd) return;
+  const s = sessions.get(sessionId);
+  if (!s || s.cwd) return;
+  s.cwd = cwd;
+  markDirty(sessionId);
+}
+
+// ---------------------------------------------------------------------------
+// Primary briefing — designation lifecycle (Live Learning Briefing)
+//
+// The designation is a POINTER over existing structures (eng review D8): the briefing body
+// lives in `research[]`, read-state is the shared `readAt`. These mutators only move the
+// pointer through its state machine (see PrimaryBriefing in src/types.ts for the diagram).
+// Scheduling (warming) lives in prefetch.ts; deciding (ranking) lives in ranking.ts.
+// ---------------------------------------------------------------------------
+
+/**
+ * Designate a topic as the session's primary (status: warming). A read predecessor demotes to
+ * its read row (design review DR7 — it is already in `research[]`, nothing else to do); a
+ * ready-unread predecessor stays as an unread row (superseded); a warming predecessor is simply
+ * replaced (its in-flight warm is discarded by the scheduler's designation check).
+ */
+export function designatePrimary(
+  sessionId: string,
+  pick: { topic: string; reason: string; docs?: DocRef[] },
+): PrimaryBriefing | null {
+  const s = sessions.get(sessionId);
+  if (!s) return null;
+  if ((s.dismissedTopics ?? []).includes(topicKey(pick.topic))) return null;
+  // If this topic's briefing already exists (e.g. the user researched it via a chip earlier),
+  // the designation is born ready — no warm needed, the body is already in research[].
+  const existing = s.research.find((r) => topicKey(r.topic) === topicKey(pick.topic));
+  const now = Date.now();
+  s.primary = {
+    topic: pick.topic,
+    reason: pick.reason,
+    status: existing ? (existing.readAt != null ? 'read' : 'ready') : 'warming',
+    since: now,
+    readyMs: existing ? 0 : null,
+    failures: 0,
+    docs: pick.docs?.slice(0, 3),
+  };
+  markDirty(sessionId);
+  return s.primary;
+}
+
+/** Flip the primary to ready (its briefing just landed in research[]). `readyMs` is the frozen
+ *  queued→ready duration — the D17 time-to-ready metric, shown on the strip (DR11). */
+export function setPrimaryReady(sessionId: string, topic: string, readyMs: number): boolean {
+  const s = sessions.get(sessionId);
+  if (!s?.primary || topicKey(s.primary.topic) !== topicKey(topic)) return false;
+  if (s.primary.status !== 'warming') return false;
+  s.primary = { ...s.primary, status: 'ready', since: Date.now(), readyMs, failures: 0 };
+  flushNow(sessionId); // user-visible signal state — survive a crash, like readAt/pinnedAt
+  return true;
+}
+
+/** Record a warm failure; flips to the error state at `maxFailures` (back-off, eng review D7). */
+export function recordPrimaryFailure(sessionId: string, topic: string, maxFailures = 2): boolean {
+  const s = sessions.get(sessionId);
+  if (!s?.primary || topicKey(s.primary.topic) !== topicKey(topic)) return false;
+  const failures = (s.primary.failures ?? 0) + 1;
+  s.primary = {
+    ...s.primary,
+    failures,
+    ...(failures >= maxFailures ? { status: 'error' as const, since: Date.now() } : {}),
+  };
+  markDirty(sessionId);
+  return s.primary.status === 'error';
+}
+
+/** Manual retry from the strip's error readout: error → warming, failure count reset. */
+export function retryPrimary(sessionId: string): PrimaryBriefing | null {
+  const s = sessions.get(sessionId);
+  if (!s?.primary || s.primary.status !== 'error') return null;
+  s.primary = { ...s.primary, status: 'warming', since: Date.now(), failures: 0 };
+  markDirty(sessionId);
+  return s.primary;
+}
+
+/**
+ * Dismiss the primary ("NOT USEFUL", eng review D18 / design DR8). Commits the exclusion:
+ * the topicKey joins dismissedTopics (never suggested or designated again this session), its
+ * unread briefing (if any) is marked read so it falls to the read rows, and the designation
+ * clears. Returns the dismissed designation for logging, or null if there was none.
+ * The 5s undo window is CLIENT-held — by the time this runs, the dismissal is final
+ * (only committed dismissals are logged).
+ */
+export function dismissPrimary(sessionId: string): PrimaryBriefing | null {
+  const s = sessions.get(sessionId);
+  if (!s?.primary) return null;
+  const dismissed = s.primary;
+  const k = topicKey(dismissed.topic);
+  s.dismissedTopics = [...(s.dismissedTopics ?? []), k];
+  s.suggestedTopics = s.suggestedTopics.filter((t) => topicKey(t.topic) !== k);
+  const r = s.research.find((x) => topicKey(x.topic) === k);
+  if (r && r.readAt == null) r.readAt = Date.now();
+  s.primary = null;
+  flushNow(sessionId); // user-intent state — survive a crash
+  return dismissed;
+}
+
+/** Demote a READ primary when the next pick arrives (design review DR7 — read is not terminal;
+ *  the briefing already lives in the read rows, so this only clears the pointer). */
+export function clearPrimary(sessionId: string): boolean {
+  const s = sessions.get(sessionId);
+  if (!s?.primary) return false;
+  s.primary = null;
   markDirty(sessionId);
   return true;
 }

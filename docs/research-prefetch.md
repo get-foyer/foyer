@@ -58,3 +58,27 @@ dot; the client rebuilds its dot set from the reconnect replay so a dot can neve
   the live path.~~ **Resolved 2026-06-08** ([ADR 0003 addendum](decisions/0003-background-research-prefetch.md)):
   warming is decoupled from summarising — a `waiting` or `done` session with chips warms once via
   a prefetch-only `POST /prefetch` trigger, so its final topics light up too.
+
+## Addendum — 2026-06-10: the primary briefing layer (ADR 0005)
+
+The chip warm-loop above stays exactly as described — viewed-session-only, single-flight, the
+secondary follow-up surface. On top of it, [ADR 0005](decisions/0005-live-learning-briefing.md)
+adds a recommendation layer: each active session gets ONE **primary briefing** — the best thing to
+read right now — selected by the activity LLM and warmed in the background so it's already there
+when you glance over.
+
+Two things make the primary's warming different from the chip loop, and they are deliberate:
+
+- **Per-active-session fan-out, not viewed-only.** The glance-over moment must work for the
+  sessions you are _not_ watching, so every active session's primary warms. The fan-out is bounded
+  by a global concurrency cap (`FOYER_PRIMARY_WARM_CONCURRENCY`, default 2) with glance-priority
+  ordering (viewed session first, then working newest-first), and each runner still yields to its
+  own session's live summary — the ADR 0003 latency rule is preserved per session.
+- **Completion is the same data path as a tap.** A warmed primary lands via `addResearch` +
+  `research_result` (a real unread briefing, one source of truth), and the designation flips to
+  `ready` (a `primary` SSE event). The chip loop's hidden-cache trick is for speculative chips that
+  may never be tapped; the primary is the recommended read, so its briefing is materialised.
+
+Per-warm time-to-ready is logged (the starvation metric) and shown on the strip as `ready · mm:ss`.
+Whether cap=2 actually holds the 3-5 minute wait window at 5+ simultaneous sessions is an open
+question the metric exists to answer before the cap is raised.

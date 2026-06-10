@@ -24,8 +24,29 @@
         "required": ["topic", "reason"],
         "additionalProperties": false
       }
+    },
+    "primary": {
+      "description": "Which ONE topic from `topics` is THE most valuable read for this task right now, or null. The topic must be the exact text of one item in `topics`. Return null when no pick is clearly valuable OR to keep the current primary unchanged (null = keep). The reason must be specific (<=80 chars), naming the area/doc that makes it primary — never generic filler.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "type": "string",
+              "description": "Exact text of one item in `topics`."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Specific one-line why-now (<=80 chars), e.g. \"the session is editing server/providers + security hooks\"."
+            }
+          },
+          "required": ["topic", "reason"],
+          "additionalProperties": false
+        },
+        { "type": "null" }
+      ]
     }
   },
-  "required": ["summary", "topics"],
+  "required": ["summary", "topics", "primary"],
   "additionalProperties": false
 }

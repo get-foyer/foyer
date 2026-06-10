@@ -13,7 +13,9 @@ import {
   finishSession,
   getSession,
   markWorking,
+  recordSessionCwd,
 } from './state.js';
+import { recordTouchedPath } from './touched.js';
 import { broadcast } from './sse.js';
 import {
   recordTranscriptPath,
@@ -220,7 +222,9 @@ async function recoverTitle(p: HookPayload): Promise<string> {
 async function onUserPrompt(sessionId: string, p: HookPayload): Promise<void> {
   const prompt = (p.prompt ?? '').trim() || '(no prompt)';
   const { session, continued } = startSession(sessionId, prompt);
-  // Record the transcript path immediately — activity.ts uses it for summarisation context
+  // Record the transcript path immediately — activity.ts uses it for summarisation context.
+  // cwd grounds the repo doc-source scan for the primary briefing.
+  recordSessionCwd(sessionId, p.cwd);
   recordTranscriptPath(sessionId, p.transcript_path);
   broadcast('task', { sessionId, prompt, prompts: session.prompts, startedAt: session.startedAt });
   // Focus signal: a genuine user prompt makes this the live channel. Emitted ONLY here (never
@@ -239,6 +243,23 @@ async function onUserPrompt(sessionId: string, p: HookPayload): Promise<void> {
   console.log(
     `[hook] Task ${continued ? 'continued' : 'started'}: ${sessionId} — "${prompt.slice(0, 80)}"`,
   );
+}
+
+/**
+ * Extract touched file paths from a tool-call payload (Live Learning Briefing ranking signal).
+ * Only WRITE/EDIT/READ-shaped tools carry a useful "working in this area" signal: `file_path`
+ * (Write/Edit/Read) and `notebook_path` (NotebookEdit). Bash commands, globs, and search dirs
+ * are deliberately ignored — they say where the agent LOOKED, not where the task LIVES.
+ * Pure in-memory accumulation (eng review D14): no I/O on the hook path, no throw on any shape.
+ */
+function recordTouchedFromTool(sessionId: string, p: HookPayload): void {
+  const input = p.tool_input;
+  if (!input || typeof input !== 'object') return;
+  for (const key of ['file_path', 'notebook_path'] as const) {
+    const v = input[key];
+    if (typeof v === 'string' && v)
+      recordTouchedPath(sessionId, v, p.cwd ?? getSession(sessionId)?.cwd);
+  }
 }
 
 async function onPostToolUse(sessionId: string, p: HookPayload): Promise<void> {
@@ -265,7 +286,11 @@ async function onPostToolUse(sessionId: string, p: HookPayload): Promise<void> {
     });
   }
 
-  // Update the transcript path and schedule a debounced summarisation.
+  // Record cwd (grounds the repo doc scan) + the touched-path signal, then schedule a
+  // debounced summarisation. Both records are pure in-memory updates — the hook path
+  // stays non-blocking.
+  recordSessionCwd(sessionId, p.cwd);
+  recordTouchedFromTool(sessionId, p);
   recordTranscriptPath(sessionId, p.transcript_path);
   scheduleSummarize(sessionId);
 }

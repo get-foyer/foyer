@@ -22,8 +22,13 @@ import { join } from 'path';
 import { readFile, unlink, mkdtemp, rm } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
-import { normalizeTopics, RESEARCH_PROMPT, parseResearchSections } from './text.js';
+import type { LlmProvider, ResearchResult, ActivityContext, ActivityOutput } from './index.js';
+import {
+  normalizeTopics,
+  normalizePrimary,
+  RESEARCH_PROMPT,
+  parseResearchSections,
+} from './text.js';
 import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './internal.js';
 import { sanitizeUrl } from '../../src/lib/url.js';
 
@@ -60,9 +65,7 @@ export class CodexProvider implements LlmProvider {
     }
   }
 
-  async summarizeActivity(
-    ctx: ActivityContext,
-  ): Promise<{ summary: string; topics: SuggestedTopic[] }> {
+  async summarizeActivity(ctx: ActivityContext): Promise<ActivityOutput> {
     const prompt = buildActivityPrompt(ctx);
     const outFile = join(tmpdir(), `foyer-activity-${Date.now()}.json`);
 
@@ -76,10 +79,13 @@ export class CodexProvider implements LlmProvider {
       ]);
 
       const raw = await readFile(outFile, 'utf-8');
-      const parsed = JSON.parse(raw) as { summary?: string; topics?: unknown };
+      const parsed = JSON.parse(raw) as { summary?: string; topics?: unknown; primary?: unknown };
+      const topics = normalizeTopics(parsed.topics);
       return {
         summary: parsed.summary ?? 'Agent is working…',
-        topics: normalizeTopics(parsed.topics),
+        topics,
+        // Old-shape output (no primary field) parses unchanged: normalizePrimary(undefined) → null.
+        primary: normalizePrimary(parsed.primary, topics),
       };
     } finally {
       await unlink(outFile).catch(() => {});
@@ -239,10 +245,26 @@ export function buildActivityPrompt(ctx: ActivityContext): string {
     ? ctx.previousTopics.map((t) => `  - ${t.topic}`).join('\n')
     : '(none yet)';
 
+  const touchedSection = ctx.touchedAreas?.length
+    ? `Repo areas the agent's tool calls are touching (most active first):\n${ctx.touchedAreas
+        .map((a) => `  - ${a}`)
+        .join('\n')}`
+    : '';
+
+  const docsSection = ctx.docSnippets?.length
+    ? `Project docs that match this session's context (path · title · first paragraph):\n${ctx.docSnippets
+        .map((d) => `  - ${d.path} · ${d.title} · ${d.snippet.replace(/\s+/g, ' ').slice(0, 300)}`)
+        .join('\n')}`
+    : '';
+
+  const currentPrimaryLine = ctx.currentPrimary
+    ? `Current PRIMARY topic: "${ctx.currentPrimary.topic}" (status: ${ctx.currentPrimary.status})`
+    : 'Current PRIMARY topic: (none yet)';
+
   return `You are narrating, for a live dashboard, what a coding agent is doing in a session.
 The dashboard shows many sessions side by side, so the summary must read at a glance: an engineer should glance once and instantly know what the session is about and where it is.
 
-Given the agent's original task and a tail of the agent's transcript, return JSON with two fields:
+Given the agent's original task and a tail of the agent's transcript, return JSON with three fields:
 
 - "summary": 2-4 sentences of markdown — what the agent is working on at this moment and what it just did. Present tense. No preamble.
 
@@ -254,13 +276,21 @@ Given the agent's original task and a tail of the agent's transcript, return JSO
   5. Skip the trivial/obvious (no "what is JavaScript"). If nothing is worth suggesting, return an empty array.
   6. STABILITY: keep the previously-suggested topics below unless the focus has clearly shifted — reuse the same wording so chips don't churn.
 
+- "primary": which ONE topic from your "topics" array is THE most valuable read for understanding THIS task right now, or null. Rules:
+  1. Either { "topic": "<exact text of one item in topics>", "reason": "<specific one-line why-now, ≤80 chars>" } or null.
+  2. The "reason" must be SPECIFIC and grounded — name the area or doc that makes it primary (e.g. "the session is editing server/providers + security hooks"). Never generic filler.
+  3. Return null when no topic is a clearly valuable read (a generic pick is worse than none) — null is a normal, expected answer for thin context.
+  4. STICKINESS: a current PRIMARY topic is listed below. Propose a DIFFERENT topic ONLY if the task has meaningfully shifted away from it. If the current primary is still the right read, return null (null = keep it). Do not churn the primary between near-equivalent picks.
+
 ${taskSection}
 
 Current session status: ${statusLine}
-
+${touchedSection ? `\n${touchedSection}\n` : ''}${docsSection ? `\n${docsSection}\n` : ''}
 Recent transcript tail:
 ${ctx.transcriptTail.slice(0, 3000) || '(no transcript available yet)'}
 
 Previously-suggested topics (keep stable unless the focus shifted):
-${previousTopicsList}`;
+${previousTopicsList}
+
+${currentPrimaryLine}`;
 }
