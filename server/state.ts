@@ -353,7 +353,7 @@ export function setActivityError(sessionId: string, error: string): boolean {
 export function setWaiting(sessionId: string, reason: string | null): boolean {
   const s = sessions.get(sessionId);
   if (!s) return false;
-  if (s.status === 'done') return true;
+  if (s.status === 'done' || s.status === 'interrupted') return true;
   s.status = 'waiting';
   s.waitingReason = reason;
   flushNow(sessionId); // lifecycle transition — persist immediately

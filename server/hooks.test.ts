@@ -22,6 +22,7 @@ vi.mock('./activity.js', () => ({
   summarizeNow: vi.fn(),
   stopTranscriptWatcher: vi.fn(),
   resetSummarizeBaseline: vi.fn(),
+  recordWaitingBaseline: vi.fn(),
 }));
 
 import { handleHook } from './hooks.js';
@@ -492,6 +493,76 @@ describe('handleHook active focus signal', () => {
       expect.objectContaining({ sessionId: 'focus-3' }),
     );
     expect(broadcast).not.toHaveBeenCalledWith('active', expect.anything());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Done-session waiting suppression — Claude Code fires an idle_prompt
+// Notification ("waiting for your input") ~60s after a turn ends, i.e. AFTER
+// Stop already marked the session done. setWaiting refuses to flip a done
+// session back, so broadcasting `waiting` anyway would desync the client
+// ("Needs you" dot on a session the server knows is done) — the false-signal
+// source that blocked OS notifications.
+// ---------------------------------------------------------------------------
+
+describe('handleHook waiting broadcast on done sessions', () => {
+  it('suppresses the waiting broadcast for a done session (idle_prompt echo)', async () => {
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'idle-echo',
+        cwd: '/home/user/project',
+        prompt: 'Do the thing',
+      }),
+      fakeRes(),
+    );
+    await handleHook(
+      fakeReq({ hook_event_name: 'Stop', session_id: 'idle-echo', cwd: '/home/user/project' }),
+      fakeRes(),
+    );
+    vi.mocked(broadcast).mockClear();
+
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'Notification',
+        session_id: 'idle-echo',
+        cwd: '/home/user/project',
+        notification_type: 'idle_prompt',
+        message: 'Claude is waiting for your input',
+      }),
+      fakeRes(),
+    );
+
+    expect(getSession('idle-echo')!.status).toBe('done'); // server state untouched
+    expect(broadcast).not.toHaveBeenCalledWith('waiting', expect.anything());
+  });
+
+  it('still broadcasts waiting for a working session', async () => {
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'real-wait',
+        cwd: '/home/user/project',
+        prompt: 'Do the thing',
+      }),
+      fakeRes(),
+    );
+    await handleHook(
+      fakeReq({
+        hook_event_name: 'Notification',
+        session_id: 'real-wait',
+        cwd: '/home/user/project',
+        notification_type: 'permission_prompt',
+        message: 'Allow Bash?',
+      }),
+      fakeRes(),
+    );
+
+    expect(getSession('real-wait')!.status).toBe('waiting');
+    expect(broadcast).toHaveBeenCalledWith('waiting', {
+      sessionId: 'real-wait',
+      reason: 'Allow Bash?',
+    });
   });
 });
 
