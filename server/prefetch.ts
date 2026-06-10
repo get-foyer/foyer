@@ -35,7 +35,14 @@ import type {
   Session,
 } from '../src/types.js';
 import { getActiveProvider } from './providers/index.js';
-import { getSession, isResearchInFlight, addResearch, topicKey } from './state.js';
+import {
+  getSession,
+  isResearchInFlight,
+  addResearch,
+  topicKey,
+  setPrimaryReady,
+  recordPrimaryFailure,
+} from './state.js';
 import { isSummarizing } from './activity.js';
 import { broadcast } from './sse.js';
 import { cfg } from './config.js';
@@ -220,6 +227,10 @@ export function clearPrefetch(sessionId: string): void {
     cache.delete(sessionId);
   }
   failures.delete(sessionId);
+  // Drop any queued (not-running) primary warm too; a running one is invalidated by the
+  // generation bump above (its result is discarded on landing).
+  const pe = primaryQueue.get(sessionId);
+  if (pe && !pe.running) primaryQueue.delete(sessionId);
   if (activePrefetchSessionId === sessionId) activePrefetchSessionId = null;
 }
 
@@ -346,6 +357,138 @@ export function getPrefetchStats(): Readonly<typeof counters> {
   return { ...counters };
 }
 
+// ---------------------------------------------------------------------------
+// PRIMARY-briefing warming — per-active-session fan-out with a global cap
+//
+// Unlike the chip warm-loop above (viewed-session-only, single-flight), the PRIMARY of EVERY
+// active session warms in the background so the glance-over moment works for sessions you are
+// not watching (eng review D3). The fan-out is bounded by a global concurrency cap (default 2,
+// FOYER_PRIMARY_WARM_CONCURRENCY) and each runner still yields to the latency-critical live
+// summary of its own session. Queue order is glance-priority (eng review D17): the viewed
+// session first, then working sessions newest-first — so the sessions most likely to be looked
+// at warm first when the cap saturates. Per-warm time-to-ready is logged (the D17 starvation
+// metric) and frozen onto the designation as `readyMs` (the strip's "ready · mm:ss" readout).
+//
+// Completion path is the SAME data path as a tap (eng review D8 — one source of truth): the
+// result is stored via addResearch (an unread row, broadcast as research_result) and the
+// designation flips to ready (broadcast as `primary`).
+// ---------------------------------------------------------------------------
+
+interface PrimaryEntry {
+  topicKey: string;
+  topic: string;
+  gen: number;
+  queuedAt: number;
+  running: boolean;
+}
+
+const primaryQueue = new Map<string, PrimaryEntry>();
+let primaryInFlight = 0;
+
+/**
+ * Queue the session's current primary designation (status: warming) for background warming.
+ * Idempotent — re-scheduling the same designation is a no-op; a superseded designation replaces
+ * the queued entry (the old in-flight result is discarded by the designation check on landing).
+ */
+export function schedulePrimaryWarm(sessionId: string): void {
+  if (cfg.primaryWarmConcurrency <= 0) return;
+  const s = getSession(sessionId);
+  const p = s?.primary;
+  if (!s || !p || p.status !== 'warming') return;
+  const k = topicKey(p.topic);
+  const existing = primaryQueue.get(sessionId);
+  if (existing && existing.topicKey === k) return; // already queued/running for this designation
+  // A different topic mid-warm is fine to displace: the old runner keeps its own entry reference
+  // (its result still lands as a normal unread row), and the designation check stops it from
+  // flipping primary state. The map slot now tracks the NEW designation.
+  primaryQueue.set(sessionId, {
+    topicKey: k,
+    topic: p.topic,
+    gen: genOf(sessionId),
+    queuedAt: Date.now(),
+    running: false,
+  });
+  void pumpPrimaryWarms();
+}
+
+/** Glance-priority order (eng review D17): viewed session first, then working newest-first. */
+function primaryQueueOrder(): string[] {
+  const queued = [...primaryQueue.entries()].filter(([, e]) => !e.running).map(([sid]) => sid);
+  return queued.sort((a, b) => {
+    if (a === activePrefetchSessionId) return -1;
+    if (b === activePrefetchSessionId) return 1;
+    const sa = getSession(a);
+    const sb = getSession(b);
+    const wa = sa?.status === 'working' ? 1 : 0;
+    const wb = sb?.status === 'working' ? 1 : 0;
+    if (wa !== wb) return wb - wa;
+    return (sb?.startedAt ?? 0) - (sa?.startedAt ?? 0);
+  });
+}
+
+async function pumpPrimaryWarms(): Promise<void> {
+  while (primaryInFlight < cfg.primaryWarmConcurrency) {
+    const next = primaryQueueOrder()[0];
+    if (!next) return;
+    const entry = primaryQueue.get(next);
+    if (!entry || entry.running) return;
+    entry.running = true;
+    primaryInFlight++;
+    void runPrimaryWarm(next, entry).finally(() => {
+      primaryInFlight--;
+      if (primaryQueue.get(next) === entry) primaryQueue.delete(next);
+      void pumpPrimaryWarms();
+    });
+  }
+}
+
+async function runPrimaryWarm(sessionId: string, entry: PrimaryEntry): Promise<void> {
+  // Yield to the latency-critical live summary of THIS session (same rule as the chip loop).
+  while (isSummarizing(sessionId)) {
+    await sleep(YIELD_MS);
+  }
+  // Re-validate after the wait: designation unchanged, generation current.
+  const stillDesignated = () => {
+    const p = getSession(sessionId)?.primary;
+    return p && topicKey(p.topic) === entry.topicKey && entry.gen === genOf(sessionId);
+  };
+  if (!stillDesignated()) return;
+
+  const provider = getActiveProvider();
+  if (!provider) return;
+  let result: ProviderResearchResult | null = null;
+  try {
+    result = await provider.research(entry.topic);
+  } catch {
+    result = null;
+  }
+
+  if (result && entry.gen === genOf(sessionId)) {
+    const readyMs = Date.now() - entry.queuedAt;
+    // One source of truth (D8): the briefing body lands in research[] like any other briefing…
+    const stored: StoredResearchResult = { ...result, topic: entry.topic, ts: Date.now() };
+    addResearch(sessionId, stored);
+    broadcast('research_result', { sessionId, ...stored });
+    // …and the designation flips to ready only if it still points at this topic.
+    if (setPrimaryReady(sessionId, entry.topic, readyMs)) {
+      broadcast('primary', { sessionId, primary: getSession(sessionId)?.primary ?? null });
+      console.log(
+        `[primary] ready "${entry.topic.slice(0, 48)}" — time-to-ready ${Math.round(readyMs / 1000)}s (${sessionId})`,
+      );
+    }
+  } else if (!result && stillDesignated()) {
+    const errored = recordPrimaryFailure(sessionId, entry.topic);
+    broadcast('primary', { sessionId, primary: getSession(sessionId)?.primary ?? null });
+    if (!errored) {
+      // One automatic retry before the error readout (failure cap = 2).
+      primaryQueue.delete(sessionId);
+      schedulePrimaryWarm(sessionId);
+    } else {
+      console.log(`[primary] failed ×2 "${entry.topic.slice(0, 48)}" — error state (${sessionId})`);
+    }
+  }
+}
+
 /** Clear ALL module state. Tests only. */
 export function _resetPrefetchForTest(): void {
   cache.clear();
@@ -357,4 +500,6 @@ export function _resetPrefetchForTest(): void {
   counters.hit = 0;
   counters.consumed = 0;
   counters.wasted = 0;
+  primaryQueue.clear();
+  primaryInFlight = 0;
 }

@@ -122,6 +122,12 @@ describe('buildActivityPrompt', () => {
     previousTopics: [] as { topic: string; reason: string }[],
     status: 'working' as 'working' | 'waiting' | 'done',
     waitingReason: null as string | null,
+    touchedAreas: [] as string[],
+    docSnippets: [] as { path: string; title: string; snippet: string }[],
+    currentPrimary: null as {
+      topic: string;
+      status: 'warming' | 'ready' | 'read' | 'error';
+    } | null,
   };
 
   it('includes the user prompt in the output', () => {

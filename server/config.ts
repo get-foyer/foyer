@@ -29,4 +29,16 @@ export const cfg = {
   /** How many of the viewed session's top suggested topics to speculatively prefetch in the
    *  background so a tap is instant. 0 disables prefetch entirely (pure reactive — ADR 0001). */
   prefetchTopics: nonNegInt(process.env.FOYER_PREFETCH_TOPICS, 3),
+  /** Global cap on concurrent PRIMARY-briefing warms across all active sessions (eng review
+   *  D3/D17 — capped fan-out; raise only on time-to-ready metric evidence). 0 disables primary
+   *  warming entirely. */
+  primaryWarmConcurrency: nonNegInt(process.env.FOYER_PRIMARY_WARM_CONCURRENCY, 2),
+  /** External doc dirs for briefing discovery — comma-separated absolute paths. Listing a dir is
+   *  the EXPLICIT per-source consent (eng review D20): title+first-paragraph snippets from these
+   *  dirs are sent to the configured LLM provider. Empty by default; repo docs (session cwd) are
+   *  the only default-on source. */
+  docDirs: (process.env.FOYER_DOC_DIRS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
 } as const;

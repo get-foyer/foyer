@@ -1,8 +1,24 @@
 import type { ResearchLink, ResearchSection } from '../../src/types.js';
-import type { SuggestedTopic, SessionStatus } from '../../src/types.js';
+import type { SuggestedTopic, SessionStatus, PrimaryStatus } from '../../src/types.js';
 import type { ProviderKind } from '../config.js';
 
 export type { SuggestedTopic };
+
+/** The LLM's primary-briefing pick for this tick: a topic from its own `topics` output plus a
+ *  specific one-line why-now. Null = no confident pick OR keep the current primary (the server's
+ *  sticky rule treats null as keep — see server/ranking.ts decidePrimary). */
+export interface PrimaryProposal {
+  topic: string;
+  reason: string;
+}
+
+/** What summarizeActivity() returns. `primary` is validated at the parse site (normalizePrimary)
+ *  so a hallucinated topic can never reach the designation machinery. */
+export interface ActivityOutput {
+  summary: string;
+  topics: SuggestedTopic[];
+  primary: PrimaryProposal | null;
+}
 
 /** What a provider's research() returns; the route wraps it with `topic` + `ts` to store. */
 export interface ResearchResult {
@@ -29,6 +45,15 @@ export interface ActivityContext {
   status: SessionStatus;
   /** Why the session is blocked on the user, if waiting (e.g. a permission prompt). */
   waitingReason: string | null;
+  /** Dir areas the agent's tool calls touched (most-active first, capped) — grounds the primary
+   *  pick in WHERE the work is happening. Empty when no tool calls carried paths yet. */
+  touchedAreas: string[];
+  /** Top-K matched doc snippets (local preselection, eng review D13 — never the full index).
+   *  The only doc content that enters this prompt. */
+  docSnippets: { path: string; title: string; snippet: string }[];
+  /** The session's current primary designation, so the model proposes a replacement ONLY on a
+   *  meaningful task shift (the previousTopics anti-churn pattern, applied to the primary). */
+  currentPrimary: { topic: string; status: PrimaryStatus } | null;
 }
 
 /**
@@ -70,13 +95,16 @@ export interface LlmProvider {
   research(topic: string): Promise<ResearchResult>;
   /**
    * Produce a live summary of what the agent is doing right now, given the session context.
-   * Returns { summary, topics } where:
+   * Returns { summary, topics, primary } where:
    *   summary = 2-4 sentences of markdown (present tense, no preamble)
    *   topics  = 3-6 research topics derived from the agent's work, each with a
    *             one-line `reason` (provenance). May be []. Normalized via
    *             normalizeTopics() (server/providers/text.ts) at each parse site.
+   *   primary = the model's pick of which topic is THE one to read now (must be one of
+   *             `topics`; null = no confident pick / keep current). Validated via
+   *             normalizePrimary() at each parse site.
    */
-  summarizeActivity(ctx: ActivityContext): Promise<{ summary: string; topics: SuggestedTopic[] }>;
+  summarizeActivity(ctx: ActivityContext): Promise<ActivityOutput>;
 }
 
 // Lazy singleton — set after the server reads config

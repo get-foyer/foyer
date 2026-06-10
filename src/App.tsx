@@ -1,5 +1,12 @@
 import React, { useEffect, useReducer, useState } from 'react';
-import type { Session, ResearchResult, SuggestedTopic, FocusEntry, SnapshotPayload } from './types';
+import type {
+  Session,
+  ResearchResult,
+  SuggestedTopic,
+  FocusEntry,
+  SnapshotPayload,
+  PrimaryBriefing,
+} from './types';
 import { newSession, MAX_FOCUS, sortPinnedFirst } from './types';
 import { useSSE } from './hooks/useSSE';
 import type { ConnectionStatus } from './hooks/useSSE';
@@ -87,6 +94,9 @@ type Action =
   | { type: 'research_primed'; payload: { sessionId: string; topic: string } }
   /** A suggested topic's research started/stopped warming in the background → toggle its ring. */
   | { type: 'research_warming'; payload: { sessionId: string; topic: string; active: boolean } }
+  /** The session's primary-briefing designation changed (server: designate / ready / read /
+   *  error / dismissed / demoted). `primary: null` clears the strip (falls back to extractive). */
+  | { type: 'primary'; payload: { sessionId: string; primary: PrimaryBriefing | null } }
   /** Focus signal from the server: this session just got a genuine user prompt. */
   | { type: 'active'; payload: { sessionId: string } }
   /** User clicked the FOLLOW control: resume following + jump to the live session. */
@@ -138,6 +148,17 @@ export function persistPinnedSession(sessionId: string, pinned: boolean): void {
 
 export function persistResearchRead(sessionId: string, ts: number): void {
   postKeepalive('/research/read', { sessionId, ts });
+}
+
+/** Commit a primary dismissal server-side (the 5s undo window is held in the component; this
+ *  fires only when the window lapses). The server excludes the topic + promotes the next pick. */
+export function persistPrimaryDismiss(sessionId: string): void {
+  postKeepalive('/primary/dismiss', { sessionId });
+}
+
+/** Retry a failed primary warm (error → warming) — fired from the strip's error readout. */
+export function persistPrimaryRetry(sessionId: string): void {
+  postKeepalive('/primary/retry', { sessionId });
 }
 
 export function isActiveSession(state: State, sessionId: string): boolean {
@@ -480,10 +501,20 @@ export function reducer(state: State, action: Action): State {
         .find((s) => s.sessionId === sessionId)
         ?.research.find((r) => r.ts === ts);
       if (!target || target.readAt != null) return state;
-      return updateSession(state, sessionId, (s) => ({
-        ...s,
-        research: s.research.map((r) => (r.ts === ts ? { ...r, readAt: Date.now() } : r)),
-      }));
+      return updateSession(state, sessionId, (s) => {
+        // Opening the PRIMARY's briefing flips the strip ready → read in lockstep with the row
+        // (DR10 — one read-state app-wide). The server does the same on POST /research/read; this
+        // is the optimistic local mirror so the strip dims instantly, no snapshot round-trip.
+        const flipsPrimary =
+          s.primary?.status === 'ready' && topicKey(s.primary.topic) === topicKey(target.topic);
+        return {
+          ...s,
+          research: s.research.map((r) => (r.ts === ts ? { ...r, readAt: Date.now() } : r)),
+          primary: flipsPrimary
+            ? { ...s.primary!, status: 'read' as const, since: Date.now() }
+            : s.primary,
+        };
+      });
     }
 
     case 'research_primed': {
@@ -523,6 +554,16 @@ export function reducer(state: State, action: Action): State {
         ...state,
         warmingTopics: { ...state.warmingTopics, [sessionId]: cur.filter((k) => k !== key) },
       };
+    }
+
+    case 'primary': {
+      // Patch the session's primary designation (rides the snapshot too, so this is the live
+      // delta between snapshots). `null` clears it — the strip falls back to the extractive
+      // readout. No-op for an unknown session (updateSession returns state unchanged).
+      return updateSession(state, action.payload.sessionId, (s) => ({
+        ...s,
+        primary: action.payload.primary,
+      }));
     }
 
     case 'select': {
@@ -625,6 +666,7 @@ export default function App() {
       dispatch({ type: 'research_primed', payload: data as P<'research_primed'> }),
     research_warming: (data) =>
       dispatch({ type: 'research_warming', payload: data as P<'research_warming'> }),
+    primary: (data) => dispatch({ type: 'primary', payload: data as P<'primary'> }),
   });
 
   const activeSession = state.sessions.find((s) => s.sessionId === state.activeSessionId) ?? null;
@@ -814,6 +856,11 @@ export default function App() {
                     warmingTopics={(activeId && state.warmingTopics[activeId]) || []}
                     activityStatus={activeSession?.activityStatus ?? 'idle'}
                     sessionId={activeSession?.sessionId ?? null}
+                    primary={activeSession?.primary ?? null}
+                    touchedAreas={activeSession?.touchedAreas ?? []}
+                    contextDocs={activeSession?.contextDocs ?? []}
+                    onDismissPrimary={() => activeId && persistPrimaryDismiss(activeId)}
+                    onRetryPrimary={() => activeId && persistPrimaryRetry(activeId)}
                     onOpenResearch={(ts) => {
                       if (!activeId) return;
                       dispatch({ type: 'select_research', payload: { sessionId: activeId, ts } });

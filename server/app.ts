@@ -17,8 +17,19 @@ import {
   pinSession,
   unpinSession,
   markResearchRead,
+  dismissPrimary,
+  designatePrimary,
+  retryPrimary,
 } from './state.js';
-import { resolveAndStoreResearch, schedulePrefetch, clearPrefetch } from './prefetch.js';
+import { broadcast } from './sse.js';
+import {
+  resolveAndStoreResearch,
+  schedulePrefetch,
+  clearPrefetch,
+  schedulePrimaryWarm,
+} from './prefetch.js';
+import { nextPrimaryAfterDismiss } from './ranking.js';
+import { appendDismissal } from './dismissals.js';
 import { summarizeNow } from './activity.js';
 import { localhostGuard, isValidSessionId, requireSessionId } from './security.js';
 
@@ -192,6 +203,77 @@ export function createApp(): express.Express {
       return;
     }
     markResearchRead(id, ts);
+    // markResearchRead also flips the PRIMARY ready → read when the opened briefing IS the
+    // primary (DR10, one read-state). Broadcast the (possibly-changed) designation so a second
+    // tab / reconnect reflects the dim strip — idempotent on the client when unchanged.
+    const s = getSession(id);
+    if (s?.primary) broadcast('primary', { sessionId: id, primary: s.primary });
+    res.status(200).json({});
+  });
+
+  // Dismiss the primary briefing ("NOT USEFUL", eng review D18 / design DR8). The client holds
+  // the 5s undo window — by the time this arrives, the dismissal is FINAL: the topic is excluded
+  // for the session, the dismissal is logged (the dogfood usefulness signal), and the next-ranked
+  // candidate is promoted immediately (its warm starts now — the strip never blanks).
+  app.post('/primary/dismiss', smallJson, (req, res) => {
+    const id = requireSessionId(req, res);
+    if (!id) return;
+    const s = getSession(id);
+    if (!s?.primary) {
+      // Nothing to dismiss (already superseded/dismissed) — idempotent 200, mirrors /close.
+      res.status(200).json({});
+      return;
+    }
+    if (s.primary.status === 'read') {
+      // A read primary has nothing to dismiss — it already served; the next pick demotes it.
+      res.status(409).json({ error: 'primary already read' });
+      return;
+    }
+    const dismissed = dismissPrimary(id);
+    if (dismissed) {
+      void appendDismissal({
+        sessionId: id,
+        topic: dismissed.topic,
+        reason: dismissed.reason,
+        status: dismissed.status,
+        ts: Date.now(),
+      });
+      console.log(`[primary] dismissed "${dismissed.topic.slice(0, 48)}" (${id})`);
+    }
+    // Promote the next-ranked candidate (suggestion order = the model's ranking). Null when the
+    // queue is empty — the strip falls back to the extractive readout (DR8: never a blank).
+    const fresh = getSession(id);
+    const next = fresh
+      ? nextPrimaryAfterDismiss(fresh.suggestedTopics, new Set(fresh.dismissedTopics ?? []))
+      : null;
+    if (next) {
+      const designated = designatePrimary(id, { topic: next.topic, reason: next.reason });
+      if (designated?.status === 'warming') schedulePrimaryWarm(id);
+    }
+    broadcast('primary', { sessionId: id, primary: getSession(id)?.primary ?? null });
+    res.status(200).json({});
+  });
+
+  // Manual retry from the strip's error readout (design DR — never an eternal warming ring):
+  // error → warming with the failure count reset, and the warm re-queued.
+  app.post('/primary/retry', smallJson, (req, res) => {
+    const id = requireSessionId(req, res);
+    if (!id) return;
+    const provider = getActiveProvider();
+    if (!provider) {
+      res.status(503).json({
+        error: 'No LLM provider configured. Run `foyer setup` to set one up.',
+      });
+      return;
+    }
+    const retried = retryPrimary(id);
+    if (!retried) {
+      // No primary in the error state — nothing to retry (idempotent 200).
+      res.status(200).json({});
+      return;
+    }
+    schedulePrimaryWarm(id);
+    broadcast('primary', { sessionId: id, primary: retried });
     res.status(200).json({});
   });
 

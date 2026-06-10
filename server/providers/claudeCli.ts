@@ -20,8 +20,13 @@ import { promisify } from 'util';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdtemp, rm } from 'fs/promises';
-import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
-import { normalizeTopics, RESEARCH_PROMPT, parseResearchSections } from './text.js';
+import type { LlmProvider, ResearchResult, ActivityContext, ActivityOutput } from './index.js';
+import {
+  normalizeTopics,
+  normalizePrimary,
+  RESEARCH_PROMPT,
+  parseResearchSections,
+} from './text.js';
 import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './internal.js';
 
 const execFile = promisify(_execFile);
@@ -69,9 +74,7 @@ export class ClaudeCliProvider implements LlmProvider {
     }
   }
 
-  async summarizeActivity(
-    ctx: ActivityContext,
-  ): Promise<{ summary: string; topics: SuggestedTopic[] }> {
+  async summarizeActivity(ctx: ActivityContext): Promise<ActivityOutput> {
     const { buildActivityPrompt } = await import('./codex.js');
     const prompt = buildActivityPrompt(ctx);
     // Pin to a fast/cheap model — summarisation runs often and doesn't need the
@@ -192,14 +195,12 @@ export function buildClaudeArgs(sentinelPrompt: string, extraArgs: string[]): st
 }
 
 /**
- * Parse { summary, topics } from the LLM's JSON output.
- * Falls back gracefully if JSON is malformed or fields are missing.
+ * Parse { summary, topics, primary } from the LLM's JSON output.
+ * Falls back gracefully if JSON is malformed or fields are missing — old-shape output
+ * (no `primary` field) parses unchanged with primary: null.
  * Shared by ClaudeCliProvider and AnthropicApiProvider.
  */
-export function parseActivityJson(raw: string): {
-  summary: string;
-  topics: SuggestedTopic[];
-} {
+export function parseActivityJson(raw: string): ActivityOutput {
   // Strip any accidental markdown fences around the JSON
   const cleaned = raw
     .replace(/^```(?:json)?\n?/m, '')
@@ -207,15 +208,18 @@ export function parseActivityJson(raw: string): {
     .trim();
   try {
     const parsed = JSON.parse(cleaned) as Record<string, unknown>;
+    const topics = normalizeTopics(parsed.topics);
     return {
       summary: typeof parsed.summary === 'string' ? parsed.summary : 'Agent is working…',
-      topics: normalizeTopics(parsed.topics),
+      topics,
+      primary: normalizePrimary(parsed.primary, topics),
     };
   } catch {
-    // Unparseable JSON: keep the text as summary, no topics.
+    // Unparseable JSON: keep the text as summary, no topics, no primary.
     return {
       summary: raw.slice(0, 800) || 'Agent is working…',
       topics: [],
+      primary: null,
     };
   }
 }

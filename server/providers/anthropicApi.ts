@@ -8,7 +8,7 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { cfg } from '../config.js';
-import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
+import type { LlmProvider, ResearchResult, ActivityContext, ActivityOutput } from './index.js';
 import { RESEARCH_PROMPT, parseResearchSections } from './text.js';
 import { sanitizeUrl } from '../../src/lib/url.js';
 
@@ -32,9 +32,7 @@ export class AnthropicApiProvider implements LlmProvider {
     return Boolean(cfg.anthropicApiKey?.startsWith('sk-ant-'));
   }
 
-  async summarizeActivity(
-    ctx: ActivityContext,
-  ): Promise<{ summary: string; topics: SuggestedTopic[] }> {
+  async summarizeActivity(ctx: ActivityContext): Promise<ActivityOutput> {
     const { buildActivityPrompt } = await import('./codex.js');
     const { parseActivityJson } = await import('./claudeCli.js');
     const client = this.getClient();
@@ -42,13 +40,13 @@ export class AnthropicApiProvider implements LlmProvider {
     const prompt = buildActivityPrompt(ctx);
     const response = await client.messages.create({
       model: cfg.anthropicModel,
-      // Sized to fit the summary + topics array.
+      // Sized to fit the summary + topics array (+ the small primary object).
       max_tokens: 1536,
       // No web_search — this is summarisation, not research; keeps cost low
       messages: [
         {
           role: 'user',
-          content: `${prompt}\n\nRespond with ONLY a JSON object matching this schema: { "summary": string, "topics": Array<{ "topic": string, "reason": string }> }. No markdown fences, no explanation.`,
+          content: `${prompt}\n\nRespond with ONLY a JSON object matching this schema: { "summary": string, "topics": Array<{ "topic": string, "reason": string }>, "primary": { "topic": string, "reason": string } | null }. No markdown fences, no explanation.`,
         },
       ],
     });

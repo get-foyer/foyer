@@ -85,6 +85,11 @@ Deferred work, captured with enough context to pick up cold.
 - **Context:** Surfaced as a failure mode in the live-summary-poll eng review (accepted, deferred).
   Would live alongside the single-flight guard in `server/activity.ts`. Trigger to act: provider
   slowness observed with many concurrent sessions. ~1-2h human / ~20m CC.
+- **Update (2026-06-10, ADR 0005):** a reference implementation of exactly this pattern now exists —
+  the per-session PRIMARY-warm pump in `server/prefetch.ts` (`schedulePrimaryWarm` /
+  `pumpPrimaryWarms`) enforces a global concurrency cap (`FOYER_PRIMARY_WARM_CONCURRENCY`, default 2)
+  with glance-priority ordering. The summarisation fan-out (`runLiveSummaryPass`) is still uncapped;
+  copy that pump shape if it ever needs the same guard.
 - **Depends on / blocked by:** None.
 
 ## Touch-reachable session controls (⋯ and ×)
@@ -123,7 +128,73 @@ Deferred work, captured with enough context to pick up cold.
   some ceremony for a local single-user tool.
 - **Context:** Surfaced by the eng review of this PR (testing specialist). `SessionMenu.tsx:45-79`,
   `server/sse.ts:31-74`, `server/index.ts` route handlers. ~1-2h human / ~20m CC.
+- **Update (2026-06-10, ADR 0005):** part (b) — server-side SSE reconnect replay — is now covered by
+  `server/integration.test.ts` (a fresh `/events` connection re-derives primary state from the
+  snapshot, over a real HTTP stream). The primed/warming chip re-light loops still lack a dedicated
+  emit test, and part (a) — the `SessionMenu` Popover-in-jsdom gap — remains untouched.
 - **Depends on / blocked by:** None. Pure test addition.
+
+## MCP-backed DocSource for SaaS doc tools (Notion / Linear / Jira / Confluence)
+
+- **What:** One MCP client implementing the `DocSource` interface (`server/docsources/`) so briefing
+  doc-discovery can reach cloud doc tools through MCP servers the user already runs — search-at-warm-time,
+  snippet-only results — instead of four bespoke connectors.
+- **Why:** Live Learning Briefing v1 (ADR 0005) indexes local files only. Most engineering teams keep
+  ADRs/notes in Notion, Linear, Jira, or Confluence; local-only caps the briefing wedge at solo/indie
+  repos.
+- **Pros:** One client covers all four tools; auth lives in the user's MCP server config, not Foyer
+  code; no bespoke connector suite (rejected as ocean-scope in the eng review).
+- **Cons:** Per-server search-tool-name mapping isn't standardised; headless OAuth for some MCP servers
+  is fiddly; cloud content reaching the LLM provider needs the per-source consent + egress-note model
+  (D20) extended before launch.
+- **Context:** Live Learning Briefing eng review D5/D20 (2026-06-10). The `DocSource` seam is designed
+  for this: `list()/search → { path-or-url, title, snippet, mtime }`. Reactive search-at-warm-time
+  (derive 2-3 queries from session topics), never workspace pre-indexing. ~1-2 weeks human / ~half-day CC.
+- **Depends on / blocked by:** `DocSource` interface + per-source consent model (shipped in ADR 0005).
+
+## Re-entry packet at turn end (Approach C)
+
+- **What:** When an agent stops or blocks, show a short "get back in" packet: what changed, what you
+  were learning, what to review, the next decision.
+- **Why:** Directly attacks "I forgot what this task was." Approach C in the Live Learning Briefing
+  design doc; the Codex outside voice argued re-entry (not reading) may be the real attention-leak fix.
+  The documented pivot path if briefing dogfooding shows status-glancing dominates reading.
+- **Pros:** Reuses the turn-end watcher, activity summaries, touched-areas signal, and primary
+  lifecycle from ADR 0005; more action-oriented than passive reading.
+- **Cons:** Drifts toward review tooling where larger platforms are also moving; depends on reliable
+  transcript/diff interpretation.
+- **Context:** Design doc Approach C + eng review D23 (2026-06-10). Trigger to act: dogfooding shows
+  primary briefings unread while status glances dominate. ~1 week human / ~2-3h CC.
+- **Depends on / blocked by:** Live Learning Briefing (shipped, ADR 0005).
+
+## Sidebar briefing-ready mark (evidence-gated)
+
+- **What:** A monochrome, shape-based "briefing ready" mark on sidebar session rows (pin precedent:
+  neutral glyph + visually-hidden label — never amber, since sidebar amber = live).
+- **Why:** ADR 0005 shows the primary strip only for the viewed session; a background session's ready
+  briefing is invisible until you switch. Warm-on-switch carries the multi-session value for now, but
+  if ready briefings keep being discovered late, the glance story needs this mark.
+- **Pros:** Full across-the-desk glance story for multi-session warming; amber stays pure.
+- **Cons:** A fourth sidebar row mark (live dot, unseen badge, pin) — row-noise risk, which is why
+  it's evidence-gated.
+- **Context:** Design review D6 (2026-06-10). Trigger to act: dogfooding shows missed-ready
+  frustration. ~3h human / ~20m CC.
+- **Depends on / blocked by:** Live Learning Briefing (shipped, ADR 0005).
+
+## Clickable doc citations (open-in-editor, security-gated)
+
+- **What:** Make the primary strip's cited-doc references (plain readout text in v1) clickable —
+  opening the doc via a new endpoint that resolves ONLY through the `DocSource` index.
+- **Why:** The natural strip→doc jump. Deliberately deferred because a path-opening endpoint on the
+  localhost server is a real security surface: index-only resolution, no raw paths, origin-guarded,
+  its own threat-model pass. **Do not build this casually.**
+- **Pros:** One-click from "read this" to reading it.
+- **Cons:** New server attack surface; needs path-validation + threat-model work exceeding the feature
+  itself.
+- **Context:** Design review D14 (2026-06-10) — citations ship as non-interactive readouts to honour
+  "never a dead control" without smuggling in an unreviewed endpoint. Trigger: dogfooding shows
+  strip→doc friction. ~half-day human / ~30m CC incl. tests.
+- **Depends on / blocked by:** `DocSource` index (shipped, ADR 0005); blocked by its own security review.
 
 ## Popover API fallback for unsupported browsers
 

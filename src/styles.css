@@ -973,6 +973,252 @@ body {
   overflow-y: auto;
 }
 
+/* -------------------------------------------------------------------------
+   PRIMARY BRIEFING strip — the one recommended read, as the module's top band.
+   Design review DR4: an integrated readout strip with a left STATUS RAIL, never a
+   nested card. Precedence comes from position + the rail + type weight, not a border.
+   ------------------------------------------------------------------------- */
+.primary-strip {
+  position: relative;
+  padding: 12px 14px 12px 17px; /* extra left pad for the 3px rail */
+  border-bottom: 1px solid var(--border); /* one hairline divides it from the follow-up list */
+}
+
+/* The left STATUS RAIL — amber for live (warming/ready), dim for read, red for error. This and the
+   ready LED are the strip's amber budget (DR13); the keycap is the only other sanctioned amber. */
+.primary-strip--rail::before,
+.primary-strip--rail-dim::before,
+.primary-strip--rail-error::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+}
+.primary-strip--rail::before {
+  background: var(--working);
+}
+.primary-strip--rail-dim::before {
+  background: var(--border-light, var(--border));
+}
+.primary-strip--rail-error::before {
+  background: var(--red);
+}
+
+/* Extractive pre-primary readout: pure local data, no LED, no rail (DR9). */
+.primary-strip--extractive {
+  padding-left: 14px;
+}
+.primary-strip__watch {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.primary-strip__watch-k {
+  display: inline-block;
+  min-width: 64px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 9.5px;
+}
+
+.primary-strip__kicker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.primary-strip__label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--text-dim);
+}
+
+/* Status LED — shape carries meaning beyond colour (DR13/DR15). */
+.primary-strip__led {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+.primary-strip__led--ready {
+  background: var(--working); /* the module's ONE glow source */
+  box-shadow: 0 0 6px color-mix(in srgb, var(--working) 60%, transparent);
+}
+.primary-strip__led--warming {
+  background: transparent;
+  border: 1.5px solid var(--working);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.primary-strip__led--read {
+  background: transparent;
+  border: 1.5px solid var(--text-dim);
+}
+.primary-strip__led--error {
+  background: var(--red);
+}
+
+/* Reason = the LLM's specific why-now (DR12). One line, ellipsised. */
+.primary-strip__reason {
+  margin: 0 0 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.primary-strip__reason--dim {
+  color: var(--text-muted);
+}
+
+/* Body lede (ready/read only) — clamp to 2 lines (DR15). */
+.primary-strip__lede {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.primary-strip__lede--dim {
+  color: var(--text-dim);
+}
+
+.primary-strip__error {
+  margin: 0 0 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--red);
+}
+
+/* Cited docs — plain readout text, NOT controls (DR14). */
+.primary-strip__cites {
+  margin: 0 0 10px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.primary-strip__foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* OPEN BRIEFING — the sanctioned amber keycap (backlit-key primary action, DESIGN.md). */
+.primary-strip__keycap {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  background: var(--working);
+  color: var(--on-primary, #1a1206);
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.primary-strip__keycap:hover {
+  background: var(--signal-hi, var(--working));
+  filter: brightness(1.08);
+}
+.primary-strip__keycap:focus-visible {
+  outline: 2px solid var(--working);
+  outline-offset: 2px;
+}
+/* REOPEN / RETRY — ghost (cyan link affordance), the recessive secondary action. */
+.primary-strip__keycap--ghost {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border-light, var(--border));
+}
+.primary-strip__keycap--ghost:hover {
+  filter: none;
+  border-color: var(--accent);
+}
+
+/* NOT USEFUL — recessive action-row control (DR8). Recessiveness from size/colour, not casing. */
+.primary-strip__dismiss {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--text-muted);
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.primary-strip__dismiss:hover {
+  color: var(--text-dim);
+}
+.primary-strip__dismiss:focus-visible {
+  outline: 2px solid var(--working);
+  outline-offset: 2px;
+}
+
+/* Right-aligned tabular readout — per-state time semantics (DR11). */
+.primary-strip__readout {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.primary-strip__readout--undo {
+  color: var(--text-dim);
+}
+.primary-strip__readout--undo button {
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* Follow-up topics label — the list below the strip is secondary. */
+.primary-strip__followups-label {
+  margin: 0;
+  padding: 10px 14px 0;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primary-strip__led--warming {
+    animation: none; /* hollow ring still reads as ≠ ready (shape, not motion) — DR15 */
+  }
+}
+
 /* Unified Deep Research list — one section holding suggested-topic chips AND briefing rows
    (unread → suggested → read). No internal divider: state, not a header, separates the groups. */
 .research-list {

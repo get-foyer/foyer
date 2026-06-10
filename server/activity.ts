@@ -21,8 +21,17 @@
 import { watch } from 'fs';
 import type { FSWatcher } from 'fs';
 import { getSession, finishSession, markWorking } from './state.js';
-import { setActivityGenerating, setActivity, setActivityError } from './state.js';
+import {
+  setActivityGenerating,
+  setActivity,
+  setActivityError,
+  designatePrimary,
+  clearPrimary,
+} from './state.js';
 import { broadcast } from './sse.js';
+import { getTopAreas, forgetTouched } from './touched.js';
+import { getDocIndexForSession } from './docsources/index.js';
+import { selectSnippets, decidePrimary, TICK_SNIPPET_BUDGET } from './ranking.js';
 import {
   readTranscriptTail,
   getTranscriptSize,
@@ -34,6 +43,16 @@ import type { ActivityContext } from './providers/index.js';
 
 /** Trailing debounce for touch-triggered summarisation. */
 const TOUCH_DEBOUNCE_MS = 8_000;
+
+/**
+ * Injected primary-warm scheduler (prefetch.schedulePrimaryWarm), wired at boot. A function
+ * pointer, not an import: prefetch already imports this module (isSummarizing), so importing
+ * prefetch back would create a cycle. Mirrors the sse.ts getter-injection pattern.
+ */
+let primaryWarmScheduler: ((sessionId: string) => void) | null = null;
+export function setPrimaryWarmScheduler(fn: ((sessionId: string) => void) | null): void {
+  primaryWarmScheduler = fn;
+}
 
 interface SessionMeta {
   transcriptPath: string | null;
@@ -154,6 +173,7 @@ export function stopTranscriptWatcher(sessionId: string): void {
 /** Drop all scheduler/watch state for a session that left the live in-memory window. */
 export function forgetActivitySession(sessionId: string): void {
   const m = meta.get(sessionId);
+  forgetTouched(sessionId);
   if (!m) return;
   if (m.debounceTimer !== null) clearTimeout(m.debounceTimer);
   if (m.transcriptWatcher !== null) m.transcriptWatcher.close();
@@ -442,6 +462,18 @@ async function run(sessionId: string): Promise<void> {
   try {
     const transcriptTail = transcriptPath ? await readTranscriptTail(transcriptPath) : '';
 
+    // Ranking signals (Live Learning Briefing): touched areas accumulated since the last tick,
+    // and a local top-K preselection of matching doc snippets — the ONLY doc content that enters
+    // the hot summarize path (eng review D13: constant-cost regardless of index size).
+    const touchedAreas = getTopAreas(sessionId);
+    const docIndex = await getDocIndexForSession(session.cwd);
+    const docSnippets = selectSnippets(
+      docIndex,
+      { touchedAreas, promptText: session.prompt },
+      TICK_SNIPPET_BUDGET,
+    );
+    const contextDocs = docSnippets.slice(0, 4).map((d) => ({ path: d.path, title: d.title }));
+
     const ctx: ActivityContext = {
       prompt: session.prompt,
       prompts: session.prompts,
@@ -450,21 +482,35 @@ async function run(sessionId: string): Promise<void> {
       previousTopics: session.suggestedTopics,
       status: session.status,
       waitingReason: session.waitingReason,
+      touchedAreas,
+      docSnippets: docSnippets.map((d) => ({ path: d.path, title: d.title, snippet: d.snippet })),
+      // The model sees the current primary so it proposes a replacement only on a meaningful
+      // shift (null = keep) — the previousTopics anti-churn pattern, applied to the primary.
+      currentPrimary: session.primary
+        ? { topic: session.primary.topic, status: session.primary.status }
+        : null,
     };
 
-    // `topics` defaults to [] defensively — a provider that returns nothing must not crash.
-    const { summary, topics = [] } = await provider.summarizeActivity(ctx);
+    // `topics`/`primary` default defensively — a provider that returns nothing must not crash.
+    const {
+      summary,
+      topics = [],
+      primary: proposal = null,
+    } = await provider.summarizeActivity(ctx);
 
     // setActivity filters topics against already-researched + in-flight before storing,
     // so broadcast the stored (filtered) list, not the raw model output. It also returns
     // the focus-history entry it appended (or null) — broadcast it so the client appends
     // the same entry the server stored (de-dup logic lives ONLY on the server).
+    // This write is ALSO the touched-areas flush (eng review D14).
     const entry = setActivity(sessionId, {
       summary,
       topics,
       turnSeq,
       turnPrompt,
       allowAppend,
+      touchedAreas,
+      contextDocs,
     });
     const stored = getSession(sessionId);
     const suggestedTopics = stored?.suggestedTopics ?? [];
@@ -473,7 +519,39 @@ async function run(sessionId: string): Promise<void> {
       summary,
       topics: suggestedTopics,
       entry,
+      touchedAreas,
+      contextDocs,
     });
+
+    // Primary designation: the pure sticky rule decides; designation + warming follow.
+    if (stored) {
+      const decision = decidePrimary({
+        current: stored.primary,
+        proposal,
+        dismissedKeys: new Set(stored.dismissedTopics ?? []),
+      });
+      if (decision.action === 'designate') {
+        // A READ predecessor demotes to its read row on the next pick (design review DR7).
+        if (stored.primary?.status === 'read') clearPrimary(sessionId);
+        const designated = designatePrimary(sessionId, {
+          topic: decision.topic,
+          reason: decision.reason,
+          docs: contextDocs.slice(0, 3),
+        });
+        if (designated) {
+          broadcast('primary', { sessionId, primary: designated });
+          if (designated.status === 'warming') primaryWarmScheduler?.(sessionId);
+          console.log(
+            `[primary] designated "${designated.topic.slice(0, 48)}" (${designated.status}) for ${sessionId}`,
+          );
+        }
+      } else if (stored.primary?.status === 'warming') {
+        // Designation unchanged but possibly never scheduled (e.g. server restart mid-warm:
+        // the persisted designation hydrates as `warming` with no queue entry). Re-scheduling
+        // is idempotent, so kick it every tick the status stays warming.
+        primaryWarmScheduler?.(sessionId);
+      }
+    }
     if (currentSize !== null) {
       m.lastSummarizedSize = currentSize;
     }
