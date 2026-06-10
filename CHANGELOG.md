@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-06-09
+
+### Security
+
+- **DNS rebinding protection.** Foyer's local HTTP daemon now rejects requests whose `Host`, `Origin`, or `Sec-Fetch-Site` headers prove the request came from a cross-origin page. Without this, a malicious website could read your agent sessions and prompts via a DNS rebinding attack. Non-browser clients (Claude Code hooks) are unaffected — they send no `Origin` and a localhost `Host`, so they pass untouched.
+- **URL sanitization for LLM-sourced links.** Citations and web search results returned by AI providers (Anthropic, Codex, Claude CLI) are now stripped of `javascript:`, `data:`, `vbscript:`, and other non-HTTP schemes before they reach the browser. A compromised or hallucinating model can no longer inject executable URLs into the research panel.
+- **Session ID validation.** Incoming `sessionId` values are now validated at both the HTTP layer (route handlers) and the hooks entry point — path traversal characters, oversized values, and non-alphanumeric input are rejected before they touch any in-memory or on-disk state.
+
+### Changed
+
+- **Express app extracted for testability.** Route handlers are now in `server/app.ts` (`createApp()`), separate from the boot logic in `server/index.ts`. This makes the HTTP layer fully testable with supertest without starting a real server.
+
 ## [Unreleased]
 
 ### Fixed
