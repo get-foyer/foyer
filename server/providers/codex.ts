@@ -25,6 +25,7 @@ import { dirname } from 'path';
 import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
 import { normalizeTopics, RESEARCH_PROMPT, parseResearchSections } from './text.js';
 import { FOYER_INTERNAL_DIR_PREFIX, FOYER_INTERNAL_SENTINEL } from './internal.js';
+import { sanitizeUrl } from '../../src/lib/url.js';
 
 const execFile = promisify(_execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -186,7 +187,8 @@ export async function parseCodexResearchOutput(
 
       // Web search result items carry source URLs
       if (item.type === 'web_search') {
-        const url = item.url as string | undefined;
+        // LLM/search-sourced URL ends up in an <a href> — only http(s) survives.
+        const url = typeof item.url === 'string' ? sanitizeUrl(item.url) : null;
         const title =
           (item.title as string | undefined) ?? (item.query as string | undefined) ?? url ?? '';
         if (url) links.push({ title, url });

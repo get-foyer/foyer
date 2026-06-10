@@ -73,6 +73,25 @@ describe('ResearchTab', () => {
     expect(source.getAttribute('href')).toBe('https://example.com/1');
   });
 
+  it('never renders an anchor for a dangerous link URL (persisted pre-sanitizer data)', () => {
+    const poisoned: ResearchResult[] = [
+      {
+        ...results[0],
+        links: [
+          { title: 'Evil', url: 'javascript:alert(1)' },
+          { title: 'Fine', url: 'https://safe.example' },
+        ],
+      },
+    ];
+    renderTab({ results: poisoned });
+    expect(screen.queryByRole('link', { name: 'Evil' })).toBeNull();
+    // The title still shows as plain text — the source row isn't dropped.
+    expect(screen.getByText('Evil')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Fine' }).getAttribute('href')).toBe(
+      'https://safe.example',
+    );
+  });
+
   it('renders the TL;DR lede above the sections', () => {
     renderTab();
     expect(screen.getByText(/caching trades freshness for speed/i)).toBeTruthy();

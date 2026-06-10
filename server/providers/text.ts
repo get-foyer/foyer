@@ -2,6 +2,7 @@
  * Shared text-processing helpers for LLM provider output.
  */
 import type { SuggestedTopic, ResearchSection, ResearchLink } from '../../src/types.js';
+import { sanitizeUrl } from '../../src/lib/url.js';
 
 /** Caps for a single suggested topic — protects the UI and the downstream research prompt. */
 const TOPIC_MAX = 120;
@@ -151,8 +152,8 @@ function normalizeSources(raw: unknown): ResearchLink[] {
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue;
     const rec = item as Record<string, unknown>;
-    const url = typeof rec.url === 'string' ? rec.url.trim() : '';
-    if (!/^https?:\/\//.test(url) || seen.has(url)) continue;
+    const url = typeof rec.url === 'string' ? (sanitizeUrl(rec.url) ?? '') : '';
+    if (!url || seen.has(url)) continue;
     seen.add(url);
     const title = typeof rec.title === 'string' && rec.title.trim() ? rec.title.trim() : url;
     out.push({ title, url });
