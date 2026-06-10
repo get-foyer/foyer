@@ -17,6 +17,8 @@ vi.mock('./state.js', () => ({
   setActivityGenerating: vi.fn(),
   setActivity: vi.fn(),
   setActivityError: vi.fn(),
+  markWorking: vi.fn(),
+  finishSession: vi.fn(),
 }));
 
 vi.mock('./sse.js', () => ({
@@ -37,17 +39,25 @@ import {
   scheduleSummarize,
   summarizeNow,
   recordTranscriptPath,
+  recordWaitingBaseline,
   runLiveSummaryPass,
   startLiveSummaryPoll,
   _resetActivityForTest,
 } from './activity.js';
-import { getSession, setActivityGenerating, setActivity, setActivityError } from './state.js';
+import {
+  getSession,
+  setActivityGenerating,
+  setActivity,
+  setActivityError,
+  markWorking,
+} from './state.js';
 import { broadcast } from './sse.js';
 import { getActiveProvider } from './providers/index.js';
 import { readTranscriptTail, getTranscriptSize } from './transcript.js';
 
 // Typed mock refs
 const mockGetSession = vi.mocked(getSession);
+const mockMarkWorking = vi.mocked(markWorking);
 const mockSetActivityGenerating = vi.mocked(setActivityGenerating);
 const mockSetActivity = vi.mocked(setActivity);
 const mockSetActivityError = vi.mocked(setActivityError);
@@ -416,9 +426,9 @@ describe('no session', () => {
 // ---------------------------------------------------------------------------
 
 describe('error path', () => {
-  it('calls setActivityError and broadcasts activity_error on provider failure', async () => {
+  it('broadcasts a GENERIC activity_error on provider failure (raw detail stays server-side)', async () => {
     const provider = {
-      summarizeActivity: vi.fn().mockRejectedValue(new Error('LLM timeout')),
+      summarizeActivity: vi.fn().mockRejectedValue(new Error('LLM timeout: /Users/x/.key sk-ant')),
     };
     mockGetActiveProvider.mockReturnValue(
       provider as unknown as ReturnType<typeof getActiveProvider>,
@@ -428,10 +438,13 @@ describe('error path', () => {
     summarizeNow(SESSION_ID);
     await vi.runAllTimersAsync();
 
-    expect(mockSetActivityError).toHaveBeenCalledWith(SESSION_ID, 'LLM timeout');
+    // Provider errors can embed CLI stderr/paths/keys — only a generic message
+    // may reach the browser; the raw message goes to the server console.
+    const generic = 'Summarisation failed — see the foyer server logs.';
+    expect(mockSetActivityError).toHaveBeenCalledWith(SESSION_ID, generic);
     expect(mockBroadcast).toHaveBeenCalledWith('activity_error', {
       sessionId: SESSION_ID,
-      error: 'LLM timeout',
+      error: generic,
     });
   });
 });
@@ -523,6 +536,75 @@ describe('runLiveSummaryPass', () => {
     await runLiveSummaryPass();
     // The shared generator filters path-less sessions out before any stat.
     expect(mockGetTranscriptSize).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stuck-waiting revival — a waiting session whose transcript grows past the
+// baseline stamped at setWaiting time has resumed WITHOUT a tool hook (e.g. a
+// denied permission answered with prose). The live poll must clear the wait,
+// or the "Needs you" dot sticks until Stop.
+// ---------------------------------------------------------------------------
+
+describe('stuck-waiting revival', () => {
+  function waitingSession() {
+    return {
+      ...makeSession(),
+      status: 'waiting',
+      waitingReason: 'Permission requested',
+    } as unknown as ReturnType<typeof getSession>;
+  }
+
+  it('revives a waiting session whose transcript grew past the waiting baseline', async () => {
+    recordTranscriptPath(SESSION_ID, '/tmp/t.jsonl');
+    mockGetTranscriptSize.mockResolvedValue(500);
+    await recordWaitingBaseline(SESSION_ID);
+    mockGetSession.mockReturnValue(waitingSession());
+
+    // Transcript grew → agent resumed (text-only, no tool hook fired).
+    mockGetTranscriptSize.mockResolvedValue(800);
+    await runLiveSummaryPass();
+
+    expect(mockMarkWorking).toHaveBeenCalledWith(SESSION_ID);
+    expect(mockBroadcast).toHaveBeenCalledWith(
+      'task',
+      expect.objectContaining({ sessionId: SESSION_ID }),
+    );
+  });
+
+  it('does NOT revive while the transcript is unchanged (still genuinely waiting)', async () => {
+    recordTranscriptPath(SESSION_ID, '/tmp/t.jsonl');
+    mockGetTranscriptSize.mockResolvedValue(500);
+    await recordWaitingBaseline(SESSION_ID);
+    mockGetSession.mockReturnValue(waitingSession());
+
+    await runLiveSummaryPass();
+
+    expect(mockMarkWorking).not.toHaveBeenCalled();
+    expect(mockBroadcast).not.toHaveBeenCalledWith('task', expect.anything());
+  });
+
+  it('does NOT revive a waiting session with no recorded baseline', async () => {
+    recordTranscriptPath(SESSION_ID, '/tmp/t.jsonl');
+    mockGetSession.mockReturnValue(waitingSession());
+    mockGetTranscriptSize.mockResolvedValue(800);
+
+    await runLiveSummaryPass();
+
+    expect(mockMarkWorking).not.toHaveBeenCalled();
+  });
+
+  it('revives only once — the baseline is consumed', async () => {
+    recordTranscriptPath(SESSION_ID, '/tmp/t.jsonl');
+    mockGetTranscriptSize.mockResolvedValue(500);
+    await recordWaitingBaseline(SESSION_ID);
+    mockGetSession.mockReturnValue(waitingSession());
+    mockGetTranscriptSize.mockResolvedValue(800);
+
+    await runLiveSummaryPass();
+    await runLiveSummaryPass();
+
+    expect(mockMarkWorking).toHaveBeenCalledTimes(1);
   });
 });
 
