@@ -4,6 +4,7 @@ import { Markdown } from './Markdown';
 import { MermaidFigure } from './MermaidFigure';
 import { ResearchChips } from './ResearchChips';
 import { sectionAnchors, estimateReadMinutes, serializeToMarkdown } from '../lib/research';
+import { sanitizeUrl } from '../lib/url';
 
 interface Props {
   /** This session's briefings, newest-first (binds directly to `session.research`). */
@@ -178,18 +179,27 @@ export function ResearchTab({
           <section className="research-tab__sources">
             <h2 className="research-tab__sources-title">Sources</h2>
             <ol className="research-tab__sources-list">
-              {selected.links.map((link, i) => (
-                <li key={i}>
-                  <a
-                    href={link.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="research-tab__source-link"
-                  >
-                    {link.title || link.url}
-                  </a>
-                </li>
-              ))}
+              {selected.links.map((link, i) => {
+                // Render-time guard: providers sanitize at parse time, but briefings
+                // persisted before that fix can still carry non-http(s) URLs.
+                const safeUrl = sanitizeUrl(link.url);
+                return (
+                  <li key={i}>
+                    {safeUrl ? (
+                      <a
+                        href={safeUrl}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="research-tab__source-link"
+                      >
+                        {link.title || safeUrl}
+                      </a>
+                    ) : (
+                      <span className="research-tab__source-link">{link.title}</span>
+                    )}
+                  </li>
+                );
+              })}
             </ol>
           </section>
         )}

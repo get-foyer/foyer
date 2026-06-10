@@ -237,4 +237,17 @@ describe('parseResearchSections', () => {
     const r = parseResearchSections(raw, 'T');
     expect(r.sources).toEqual([{ title: 'Good', url: 'https://a.example' }]);
   });
+
+  it('drops sources with dangerous URL schemes', () => {
+    const raw = JSON.stringify({
+      sections: [{ heading: 'H', body: 'B' }],
+      sources: [
+        { title: 'XSS', url: 'javascript:alert(1)' },
+        { title: 'Data', url: 'data:text/html,<script>alert(1)</script>' },
+        { title: 'Good', url: 'https://a.example' },
+      ],
+    });
+    const r = parseResearchSections(raw, 'T');
+    expect(r.sources).toEqual([{ title: 'Good', url: 'https://a.example' }]);
+  });
 });

@@ -20,7 +20,7 @@
  */
 import { watch } from 'fs';
 import type { FSWatcher } from 'fs';
-import { getSession, finishSession } from './state.js';
+import { getSession, finishSession, markWorking } from './state.js';
 import { setActivityGenerating, setActivity, setActivityError } from './state.js';
 import { broadcast } from './sse.js';
 import {
@@ -45,6 +45,10 @@ interface SessionMeta {
   transcriptWatcher: FSWatcher | null;
   lastWatchedOffset: number;
   seenAssistantInTurn: boolean;
+  /** Transcript size when the session entered `waiting`. Growth past this means the agent
+   *  resumed — load-bearing for text-only resumes (e.g. a denied permission answered with
+   *  prose), which fire NO tool hook, so nothing else would ever clear the wait. */
+  waitingSize: number | null;
 }
 
 const meta = new Map<string, SessionMeta>();
@@ -61,10 +65,24 @@ function getMeta(sessionId: string): SessionMeta {
       transcriptWatcher: null,
       lastWatchedOffset: 0,
       seenAssistantInTurn: false,
+      waitingSize: null,
     };
     meta.set(sessionId, m);
   }
   return m;
+}
+
+/**
+ * Stamp the transcript size at the moment a session enters `waiting`. The live size-poll
+ * compares against this baseline: growth means the agent resumed (the text-only resume path
+ * fires no tool hook, so this is the ONLY signal that clears such a wait). Fire-and-forget
+ * from the Notification hook; a missing transcript leaves the baseline null (undetectable —
+ * the wait then clears via the usual hook paths).
+ */
+export async function recordWaitingBaseline(sessionId: string): Promise<void> {
+  const m = getMeta(sessionId);
+  if (!m.transcriptPath) return;
+  m.waitingSize = await getTranscriptSize(m.transcriptPath);
 }
 
 /**
@@ -334,6 +352,30 @@ export async function runLiveSummaryPass(): Promise<void> {
       if (m.lastSummarizedSize !== null && size === m.lastSummarizedSize) continue; // unchanged
       void run(sessionId);
     }
+
+    // Waiting sessions whose transcript grew past the baseline stamped at setWaiting time:
+    // the agent resumed without firing a tool hook (e.g. a denied permission answered with
+    // prose). Nothing else clears that wait — the dot would stick at "Needs you" until Stop.
+    for (const [sessionId, m] of meta.entries()) {
+      const session = getSession(sessionId);
+      if (!session || session.status !== 'waiting') continue;
+      if (!m.transcriptPath || m.waitingSize === null) continue;
+      const size = await getTranscriptSize(m.transcriptPath);
+      if (size === null || size <= m.waitingSize) continue;
+      m.waitingSize = null;
+      markWorking(sessionId);
+      // Same revive broadcast as the PostToolUse path — the client flips the session back
+      // to working in place, preserving its prompt arc and focus state.
+      const live = getSession(sessionId) ?? session;
+      broadcast('task', {
+        sessionId,
+        prompt: live.prompt,
+        prompts: live.prompts,
+        startedAt: live.startedAt,
+      });
+      console.log(`[live] Cleared stuck waiting for ${sessionId} — transcript resumed growing`);
+      void run(sessionId);
+    }
   } finally {
     livePollInFlight = false;
   }
@@ -440,8 +482,11 @@ async function run(sessionId: string): Promise<void> {
     );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    setActivityError(sessionId, msg);
-    broadcast('activity_error', { sessionId, error: msg });
+    // Full detail stays in the server log — provider errors can embed CLI stderr,
+    // paths, or key fragments that must not reach the browser.
+    const generic = 'Summarisation failed — see the foyer server logs.';
+    setActivityError(sessionId, generic);
+    broadcast('activity_error', { sessionId, error: generic });
     console.error(`[activity] Summarisation failed for ${sessionId}:`, msg);
   } finally {
     m.inFlight = false;

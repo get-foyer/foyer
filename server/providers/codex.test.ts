@@ -69,6 +69,20 @@ describe('parseCodexResearchOutput', () => {
     expect(result.links).toEqual([{ url: 'https://example.com', title: 'Example' }]);
   });
 
+  it('drops web_search events with dangerous URL schemes', async () => {
+    const briefing = JSON.stringify({ lede: '', sections: [{ heading: 'H', body: 'B' }] });
+    const lines = [
+      JSON.stringify({ item: { type: 'agent_message', content: briefing } }),
+      JSON.stringify({ item: { type: 'web_search', url: 'javascript:alert(1)', title: 'XSS' } }),
+      JSON.stringify({ item: { type: 'web_search', url: 'https://ok.example', title: 'OK' } }),
+    ];
+    const eventsFile = join(tempDir, 'events.jsonl');
+    await writeFile(eventsFile, lines.join('\n'), 'utf-8');
+
+    const result = await parseCodexResearchOutput(eventsFile, 'topic');
+    expect(result.links).toEqual([{ url: 'https://ok.example', title: 'OK' }]);
+  });
+
   it('uses the model-reported sources when there are no web_search events', async () => {
     const briefing = JSON.stringify({
       lede: '',

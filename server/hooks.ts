@@ -21,9 +21,11 @@ import {
   summarizeNow,
   stopTranscriptWatcher,
   resetSummarizeBaseline,
+  recordWaitingBaseline,
 } from './activity.js';
 import { readFirstUserPrompt } from './transcript.js';
 import { isSelfOriginatedHook } from './providers/internal.js';
+import { isValidSessionId } from './security.js';
 
 // ---------------------------------------------------------------------------
 // Claude Code hook payload shape
@@ -128,6 +130,20 @@ export async function handleHook(req: Request, res: Response): Promise<void> {
   }
 
   if (!event || !sessionId) return;
+
+  // Silently drop malformed session ids (length/charset cap) — the 200 already went
+  // out above, mirroring the self-originated drop below. Keeps arbitrary strings out
+  // of the in-memory session Map and logs.
+  if (!isValidSessionId(sessionId)) {
+    console.log(
+      '[hook] dropped',
+      String(event)
+        .replace(/[\r\n]/g, ' ')
+        .slice(0, 80),
+      'with invalid session id',
+    );
+    return;
+  }
 
   // Server-side backstop: silently drop any hook event that originated from
   // Foyer's own internal LLM subprocess calls.  Without this guard, each
@@ -282,7 +298,19 @@ async function onNotification(sessionId: string, p: HookPayload): Promise<void> 
     setWaiting(sessionId, reason);
   }
 
+  // setWaiting refuses to flip a done session back to waiting (Stop already fired; an
+  // idle_prompt arriving a minute later is an echo of the finished turn, not a new ask).
+  // Broadcast only when the session actually IS waiting — an unconditional broadcast
+  // desyncs the client ("Needs you" dot on a session the server knows is done).
+  if (getSession(sessionId)?.status !== 'waiting') {
+    console.log(`[hook] Suppressed waiting broadcast for non-waiting session ${sessionId}`);
+    return;
+  }
+
   broadcast('waiting', { sessionId, reason });
+  // Stamp the transcript size so the live poll can detect a text-only resume (no tool
+  // hook fires on one) and clear the wait — without this the dot sticks at "Needs you".
+  void recordWaitingBaseline(sessionId);
   console.log(`[hook] Waiting on user: ${sessionId} — ${ntype}: ${reason.slice(0, 80)}`);
 }
 

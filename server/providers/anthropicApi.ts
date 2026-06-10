@@ -10,6 +10,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { cfg } from '../config.js';
 import type { LlmProvider, ResearchResult, ActivityContext, SuggestedTopic } from './index.js';
 import { RESEARCH_PROMPT, parseResearchSections } from './text.js';
+import { sanitizeUrl } from '../../src/lib/url.js';
 
 export class AnthropicApiProvider implements LlmProvider {
   readonly id = 'anthropic-api' as const;
@@ -97,8 +98,10 @@ export class AnthropicApiProvider implements LlmProvider {
           const blockAny = block as unknown as Record<string, unknown>;
           if ('citations' in blockAny && Array.isArray(blockAny.citations)) {
             for (const cite of blockAny.citations as Array<{ url?: string; title?: string }>) {
-              if (cite.url) {
-                links.push({ title: cite.title ?? cite.url, url: cite.url });
+              // Citation URLs end up in an <a href> — only http(s) survives.
+              const url = cite.url ? sanitizeUrl(cite.url) : null;
+              if (url) {
+                links.push({ title: cite.title ?? url, url });
               }
             }
           }
@@ -107,7 +110,8 @@ export class AnthropicApiProvider implements LlmProvider {
         if ((block.type as string) === 'web_search_tool_result') {
           const b = block as { content?: Array<{ url?: string; title?: string }> };
           for (const item of b.content ?? []) {
-            if (item.url) links.push({ title: item.title ?? item.url, url: item.url });
+            const url = item.url ? sanitizeUrl(item.url) : null;
+            if (url) links.push({ title: item.title ?? url, url });
           }
         }
       }
